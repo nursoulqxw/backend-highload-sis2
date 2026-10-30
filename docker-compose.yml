@@ -1,0 +1,78 @@
+x-app-env: &app-env
+  DATABASE_URL: postgresql://postgres:postgres@postgres:5432/counters
+  REDIS_URL: redis://redis:6379/0
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: counters
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d counters"]
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+  rest-api:
+    build: .
+    # Runs the migrations first, then starts Uvicorn (1 process, the same as grpc-api: fair benchmark).
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.rest.main:app --host 0.0.0.0 --port 8000 --no-access-log"]
+    environment: *app-env
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 3s
+      retries: 30
+
+  grpc-api:
+    build: .
+    command: ["python", "-m", "app.grpc_api"]
+    environment: *app-env
+    ports: ["50051:50051"]
+    depends_on:
+      # Wait for rest-api, because rest-api runs the migrations.
+      rest-api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 50051), 1)"]
+      interval: 3s
+      retries: 30
+
+  sync-worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment: *app-env
+    depends_on:
+      # Wait for rest-api, because rest-api runs the migrations.
+      rest-api: { condition: service_healthy }
+
+  # Not started by `docker compose up` (it has a profile). Run it with:
+  #   docker compose run --rm benchmark
+  # It runs inside the Docker network, so REST and gRPC are measured the same way
+  # (no Docker Desktop port forwarding in between).
+  benchmark:
+    build: .
+    profiles: ["benchmark"]
+    command: ["python", "-m", "benchmark.run_benchmark", "--rest-url", "http://rest-api:8000", "--grpc-target", "grpc-api:50051"]
+    volumes:
+      - ./benchmark:/code/benchmark  # the results are written here
+      - ./clients:/code/clients
+    depends_on:
+      rest-api: { condition: service_healthy }
+      grpc-api: { condition: service_healthy }
+
+volumes:
+  pgdata:
