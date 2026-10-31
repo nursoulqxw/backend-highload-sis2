@@ -57,10 +57,12 @@ Try the gRPC API (from the project folder, with the Python packages installed):
 import asyncio
 from clients.grpc_client import GrpcCounterClient
 
+
 async def main():
     async with GrpcCounterClient("localhost:50051") as client:
         await client.like_post(user_id=1, post_id=42)
         print(await client.get_counters(user_id=1, post_ids=[42, 43]))
+
 
 asyncio.run(main())
 ```
