@@ -1,7 +1,7 @@
 from typing import Annotated
 
 import asyncpg
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response, status
 from redis.asyncio import Redis
 
 from app.core.counters import get_counters
@@ -48,7 +48,7 @@ OptionalUserId = Annotated[int | None, Header(alias="X-User-Id", gt=0)]
 PostIds = Annotated[list[int], Depends(parse_post_ids)]
 
 
-@router.put("/posts/{post_id}/like", status_code=204)
+@router.put("/posts/{post_id}/like", status_code=status.HTTP_204_NO_CONTENT)
 async def like(
     post_id: PostId, user_id: UserId, pool: PoolDep, redis: RedisDep, faults: FaultsDep
 ) -> Response:
@@ -58,7 +58,7 @@ async def like(
     return Response(status_code=204)
 
 
-@router.delete("/posts/{post_id}/like", status_code=204)
+@router.delete("/posts/{post_id}/like", status_code=status.HTTP_204_NO_CONTENT)
 async def unlike(
     post_id: PostId, user_id: UserId, pool: PoolDep, redis: RedisDep, faults: FaultsDep
 ) -> Response:
@@ -68,7 +68,7 @@ async def unlike(
     return Response(status_code=204)
 
 
-@router.post("/posts/{post_id}/view", status_code=204)
+@router.post("/posts/{post_id}/view", status_code=status.HTTP_204_NO_CONTENT)
 async def view(
     post_id: PostId, user_id: UserId, pool: PoolDep, redis: RedisDep, faults: FaultsDep
 ) -> Response:
