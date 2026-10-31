@@ -1,12 +1,8 @@
-"""Answers: how many likes and views do these posts have, and did I like them?
-
-pid is post_id, likes is how many likes, views is how many views,
-liked_by_me is whether the user liked it or not.
-hmget is a Redis command that gets the values of multiple fields in a hash.
-In this case, it gets the number of likes and views for each post.
-"""
-
 from dataclasses import dataclass
+"answers - how many likes and views do these posts have, and did I like them?"
+
+# pid is post_id, likes is how many likes, views is how many views, liked_by_me is whether the user liked it or not
+# hmget is a Redis command that gets the values of multiple fields in a hash. In this case, it gets the number of likes and views for each post.
 
 import asyncpg
 from redis.asyncio import Redis
@@ -33,15 +29,14 @@ async def get_counters(
 
     counts: dict[int, tuple[int, int]] = {}
     misses: list[int] = []
-    # strict=True gives an error if the two lists have different lengths.
-    for pid, (likes, views) in zip(post_ids, results, strict=True):
+    for pid, (likes, views) in zip(post_ids, results, strict=True): # strict=True gives an error if the two lists have different lengths
         if likes is None or views is None:
             misses.append(pid)
         else:
             counts[pid] = (int(likes), int(views))
 
     # 2. Cache-aside: on a miss, read Postgres and fill Redis.
-    if misses:  # if the list isn't empty
+    if misses: # if the list isn't empty,
         counts.update(await load_from_db(redis, pool, misses))
 
     # 3. liked_by_me with one query.
