@@ -6,20 +6,31 @@ Course: Backend for Highloaded Environment.
 with idempotency, timeouts and retries, and measure latency and payload size against a
 REST/JSON baseline.
 
-**Short answer:** gRPC was **2.3–3x faster at p50**, **13–19x faster at p99**,
-had **3.4–4.7x more throughput** and sent **5.7–5.8x smaller responses**. One exception:
-in GetCounters with 100 posts the server work takes most of the time, so the speed was almost
-the same. But the response was still 5.7x smaller.
+**Short answer:** for like, view and reads of up to 10 posts, gRPC was **2–2.8x faster at p50**,
+**8–13x faster at p99** and had **2.9–3.8x more throughput**. Requests were **2.2–3.7x smaller**
+and GetCounters responses **5.7–5.8x smaller**. One exception: in GetCounters with 100 posts the
+server work takes most of the time, so p50 was almost the same (1.1x). The response was still 5.7x
+smaller.
 Details are in [benchmark/results.md](benchmark/results.md).
+
+## System design (from SIS #1)
+
+![System design](docs/system-design.png)
+
+This repo implements this design as one modular service. Like, View and Counter are modules in
+`app/core`, called by the REST and gRPC servers. The API Gateway and the replicas are the next
+steps for scaling. They are not part of this repo. gRPC is for internal calls. REST/JSON is for
+outside clients.
 
 ## Contents
 
 1. [How to run](#how-to-run)
 2. [How to run the tests](#how-to-run-the-tests)
 3. [How to run the benchmark](#how-to-run-the-benchmark)
-4. [Project structure](#project-structure)
-5. [How it works](#how-it-works) (like, unlike, view, get counters, sync worker)
-6. [The three parts of the task](#the-three-parts-of-the-task) (protocol, idempotency + timeouts + retries, measurements)
+4. [Monitoring: Prometheus + Grafana](#monitoring-prometheus--grafana)
+5. [Project structure](#project-structure)
+6. [How it works](#how-it-works) (like, unlike, view, get counters, sync worker)
+7. [The three parts of the task](#the-three-parts-of-the-task) (protocol, idempotency + timeouts + retries, measurements)
 
 ---
 
@@ -31,7 +42,7 @@ You need Docker.
 docker compose up --build
 ```
 
-This starts 5 containers:
+This starts 7 containers:
 
 | Container | What it does | Port |
 |---|---|---|
@@ -40,6 +51,8 @@ This starts 5 containers:
 | `rest-api` | REST/JSON API (FastAPI + Uvicorn). Runs the migration first. | 8000 |
 | `grpc-api` | gRPC API (grpcio). Uses the **same** code as `rest-api`. | 50051 |
 | `sync-worker` | Every 5 s copies counters from Redis to Postgres. | – |
+| `prometheus` | Every 5 s reads the metrics of both API servers. | 9090 |
+| `grafana` | Shows the metrics as a dashboard. | 3000 |
 
 Try the REST API:
 
@@ -77,7 +90,7 @@ The tests start real Postgres and Redis in Docker (testcontainers). Docker must 
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pytest -v          # 43 tests
+pytest -v          # 47 tests
 make lint          # code style: ruff check + ruff format --check
 ```
 
@@ -86,13 +99,18 @@ make lint          # code style: ruff check + ruff format --check
 | `tests/test_rest.py` | REST: like, unlike, view, get counters, cache miss, cold key, sync worker |
 | `tests/test_grpc.py` | gRPC: the same operations, and **REST and gRPC return the same data** |
 | `tests/test_reliability.py` | Idempotency, retries, timeouts — **each test runs twice: REST and gRPC** |
+| `tests/test_metrics.py` | Both protocols record the Prometheus metrics |
 
 ## How to run the benchmark
 
 ```bash
+docker compose down -v                # delete old data: the benchmark needs a clean database
 docker compose up -d --build
 docker compose run --rm benchmark     # or: make bench
 ```
+
+**Always start from a clean database.** The benchmark uses the same user and post ids every time.
+On old data, all likes already exist, so LikePost does no real work and looks too fast.
 
 It takes about 2 minutes. It writes 4 files into `benchmark/`:
 
@@ -106,6 +124,43 @@ To redraw the charts from `results.csv`: `python -m benchmark.charts`.
 The benchmark runs **inside** the Docker network, next to the servers. Why: on a Mac, Docker
 Desktop port forwarding made REST (50 TCP connections) 3–4x slower, but not gRPC
 (1 connection). That would not be fair.
+
+## Monitoring: Prometheus + Grafana
+
+After `docker compose up`, open the dashboard:
+
+**http://localhost:3000/d/t7-counter** (no login needed to view; admin login: `admin` / `admin`)
+
+It shows 4 panels, updated every 5 s: requests per second, errors per second, p50 latency
+and p99 latency, for REST and gRPC. The panels are empty until the API gets some traffic.
+
+```mermaid
+flowchart LR
+    REST["rest-api<br/>GET /metrics on port 8000"] --> PROM[("Prometheus<br/>port 9090")]
+    GRPC["grpc-api<br/>metrics on port 9100"] --> PROM
+    PROM --> GRAFANA["Grafana dashboard<br/>port 3000"]
+```
+
+How it works, step by step:
+
+1. Each request goes through `track_request()` in `app/core/metrics.py`. It counts the request
+   and measures its time. REST and gRPC use the same function.
+2. Each server shows its numbers as a plain text page. REST: `/metrics`. gRPC is not plain HTTP,
+   so it has a small separate HTTP server on port 9100.
+3. Prometheus reads (scrapes) both pages every 5 s and stores the history.
+4. Grafana asks Prometheus for the data and draws the charts. The data source and the dashboard
+   are loaded from the `monitoring/` folder on startup, so there is nothing to set up by hand.
+
+The metrics:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `counter_requests_total{protocol, operation, status}` | Counter | How many requests finished (`ok` or `error`) |
+| `counter_request_duration_seconds{protocol, operation}` | Histogram | How long the server worked on a request |
+
+**Dashboard latency is not benchmark latency.** The dashboard shows time **inside the server**.
+The benchmark measures from the client, so it also includes the client library, the network and
+waiting in queues. The numbers in `benchmark/results.md` were measured with the metrics turned on.
 
 ## Project structure
 
@@ -121,12 +176,14 @@ app/
     counters.py            get_counters
     errors.py              "backend is slow or down" errors -> 503 / UNAVAILABLE
     faults.py              fault injection for tests (off by default)
+    metrics.py             Prometheus metrics, used by both REST and gRPC
   rest/                    REST layer: only translates HTTP/JSON <-> app/core
   grpc_api/                gRPC layer: only translates Protobuf <-> app/core
     generated/             code generated from the .proto file (do not edit)
   worker/                  Sync Worker
 clients/                   REST and gRPC clients with deadline + retries
 benchmark/                 benchmark script, results, charts
+monitoring/                Prometheus and Grafana config, the dashboard
 tests/                     integration tests
 migrations/                Alembic (creates the tables)
 ```
@@ -156,6 +213,9 @@ flowchart LR
     CORE -- "likes table,<br/>read on cache miss" --> PG[("Postgres")]
     WORKER["sync-worker<br/>every 5 s"] -- "SPOP dirty_posts,<br/>HMGET counts" --> REDIS
     WORKER -- "batch upsert<br/>post_counters" --> PG
+    PROM[("Prometheus")] -- "reads metrics<br/>every 5 s" --> REST
+    PROM -- "reads metrics<br/>every 5 s" --> GRPC
+    GRAFANA["Grafana"] -- "queries" --> PROM
 ```
 
 The main idea: **there is only one copy of the logic** (`app/core`). REST and gRPC are thin
@@ -442,14 +502,16 @@ same time. Both servers run in 1 process each, with the same Postgres, Redis and
 
 **What the numbers say:**
 
-- **Payload:** Protobuf is about **5.7x smaller** than JSON for every GetCounters size.
+- **Payload:** Protobuf requests are **2.2–3.7x smaller** than the same data as JSON. GetCounters
+  responses are about **5.7x smaller** for every size.
   JSON repeats the field names (`"post_id"`, `"likes"`, ...) for every post; Protobuf does not.
 - **Small, fast calls** (like, view, GetCounters with 1–10 posts): gRPC p50 is
-  **2.3–3x lower**, p99 is **13–19x lower**, and throughput is **3.4–4.7x higher**.
-  gRPC meets the SIS #1 SLO **p99 < 100 ms**; REST does not at this load.
+  **2–2.8x lower**, p99 is **8–13x lower**, and throughput is **2.9–3.8x higher**.
+  gRPC meets the SIS #1 SLO **p99 < 100 ms** in these 4 operations; REST meets it in none.
 - **GetCounters with 100 posts:** the server work (100 Redis reads + 1 SQL query) is most of the
-  time, so latency is about the same. The payload is still 5.7x smaller.
-- REST had some calls that hit the 0.5 s deadline (errors column); gRPC had almost none.
+  time, so p50 is almost the same (1.1x). p99 is 4.3x lower, but gRPC just misses the SLO
+  (105.5 ms). The payload is still 5.7x smaller.
+- REST had 171 calls of 50,000 that hit the 0.5 s deadline (errors column); gRPC had none in this run.
 
 **Be honest about the limits:**
 

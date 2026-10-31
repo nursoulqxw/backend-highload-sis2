@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from app.core.counters import get_counters
 from app.core.faults import FaultInjector
 from app.core.likes import like_post, unlike_post
+from app.core.metrics import track_request
 from app.core.views import record_view
 from app.rest.schemas import PostCounterOut
 
@@ -51,8 +52,9 @@ PostIds = Annotated[list[int], Depends(parse_post_ids)]
 async def like(
     post_id: PostId, user_id: UserId, pool: PoolDep, redis: RedisDep, faults: FaultsDep
 ) -> Response:
-    async with faults.around_call():  # test-only faults, off by default
-        await like_post(pool, redis, user_id, post_id)
+    with track_request("rest", "LikePost"):
+        async with faults.around_call():  # test-only faults, off by default
+            await like_post(pool, redis, user_id, post_id)
     return Response(status_code=204)
 
 
@@ -60,8 +62,9 @@ async def like(
 async def unlike(
     post_id: PostId, user_id: UserId, pool: PoolDep, redis: RedisDep, faults: FaultsDep
 ) -> Response:
-    async with faults.around_call():  # test-only faults, off by default
-        await unlike_post(pool, redis, user_id, post_id)
+    with track_request("rest", "UnlikePost"):
+        async with faults.around_call():  # test-only faults, off by default
+            await unlike_post(pool, redis, user_id, post_id)
     return Response(status_code=204)
 
 
@@ -69,8 +72,9 @@ async def unlike(
 async def view(
     post_id: PostId, user_id: UserId, pool: PoolDep, redis: RedisDep, faults: FaultsDep
 ) -> Response:
-    async with faults.around_call():  # test-only faults, off by default
-        await record_view(pool, redis, user_id, post_id)
+    with track_request("rest", "RecordView"):
+        async with faults.around_call():  # test-only faults, off by default
+            await record_view(pool, redis, user_id, post_id)
     return Response(status_code=204)
 
 
@@ -78,5 +82,6 @@ async def view(
 async def counters(
     post_ids: PostIds, pool: PoolDep, redis: RedisDep, faults: FaultsDep, user_id: OptionalUserId = None
 ):
-    async with faults.around_call():
-        return await get_counters(pool, redis, user_id, post_ids)
+    with track_request("rest", "GetCounters"):
+        async with faults.around_call():
+            return await get_counters(pool, redis, user_id, post_ids)

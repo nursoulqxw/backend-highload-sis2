@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     # gRPC server
     grpc_port: int = 50051
+    grpc_metrics_port: int = 9100
 
     # Sync Worker
     sync_interval_seconds: float = 5.0

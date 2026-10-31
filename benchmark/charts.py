@@ -68,15 +68,18 @@ def draw_latency_chart(rows: list[dict], operations: list[str], path: Path, slo_
 
 
 def draw_payload_chart(rows: list[dict], operations: list[str], path: Path) -> None:
-    # LikePost / RecordView have empty bodies (0 B) in both protocols, so we show GetCounters only.
-    shown = [op for op in operations if op.startswith("GetCounters")]
-    fig, ax = plt.subplots(figsize=(9, 5), facecolor=SURFACE)
-    grouped_bars(ax, rows, shown, "response_bytes", "{:,} B")
-    style_axis(ax, "GetCounters response body size - lower is better", "bytes")
+    # LikePost / RecordView have empty responses (0 B) in both protocols, so the right side skips them.
+    get_counters = [op for op in operations if op.startswith("GetCounters")]
+    fig, (ax_request, ax_response) = plt.subplots(1, 2, figsize=(14, 5), facecolor=SURFACE)
+    grouped_bars(ax_request, rows, operations, "request_bytes", "{:,} B")
+    style_axis(ax_request, "Request size: the same data - lower is better", "bytes")
+    grouped_bars(ax_response, rows, get_counters, "response_bytes", "{:,} B")
+    style_axis(ax_response, "GetCounters response size - lower is better", "bytes")
     fig.text(
         0.01,
         0.01,
-        "LikePost / RecordView: 0 B response body in both protocols (204 / Empty)",
+        "REST request = the same fields as JSON (they really travel in the URL and a header). "
+        "LikePost / RecordView: 0 B response in both protocols.",
         color=MUTED,
         fontsize=8,
     )
@@ -92,6 +95,7 @@ def draw_from_csv(results_dir: Path, slo_ms: float = 100) -> None:
     for row in rows:  # CSV gives strings, the charts need numbers
         row["p50_ms"] = float(row["p50_ms"])
         row["p99_ms"] = float(row["p99_ms"])
+        row["request_bytes"] = int(row["request_bytes"])
         row["response_bytes"] = int(row["response_bytes"])
     operations = list(dict.fromkeys(row["operation"] for row in rows))
     draw_latency_chart(rows, operations, results_dir / "latency_p50_p99.png", slo_ms)

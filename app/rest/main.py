@@ -2,8 +2,9 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.config import get_settings
 from app.core.errors import BACKEND_ERRORS
@@ -50,3 +51,9 @@ async def health(request: Request):
     except BACKEND_ERRORS as exc:
         return service_unavailable_response(exc)
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    """Prometheus reads this page every 5 s."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

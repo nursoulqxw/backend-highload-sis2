@@ -1,0 +1,7 @@
+# Grafana loads every dashboard from this folder on startup.
+apiVersion: 1
+providers:
+  - name: T7
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

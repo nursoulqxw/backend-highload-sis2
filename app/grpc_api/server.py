@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 import asyncpg
 import grpc
+from prometheus_client import start_http_server
 from redis.asyncio import Redis
 
 from app.config import Settings, get_settings
@@ -17,6 +18,7 @@ from app.core.counters import get_counters
 from app.core.errors import BACKEND_ERRORS
 from app.core.faults import FaultInjector
 from app.core.likes import like_post, unlike_post
+from app.core.metrics import track_request
 from app.core.resources import create_pool, create_redis
 from app.core.views import record_view
 from app.grpc_api.generated import counter_pb2, counter_pb2_grpc
@@ -36,19 +38,19 @@ class CounterService(counter_pb2_grpc.CounterServiceServicer):
 
     async def LikePost(self, request, context):
         await check_ids(context, request.user_id, request.post_id)
-        async with self.backend_call(context):
+        async with self.backend_call(context, "LikePost"):
             await like_post(self.pool, self.redis, request.user_id, request.post_id)
         return counter_pb2.Empty()
 
     async def UnlikePost(self, request, context):
         await check_ids(context, request.user_id, request.post_id)
-        async with self.backend_call(context):
+        async with self.backend_call(context, "UnlikePost"):
             await unlike_post(self.pool, self.redis, request.user_id, request.post_id)
         return counter_pb2.Empty()
 
     async def RecordView(self, request, context):
         await check_ids(context, request.user_id, request.post_id)
-        async with self.backend_call(context):
+        async with self.backend_call(context, "RecordView"):
             await record_view(self.pool, self.redis, request.user_id, request.post_id)
         return counter_pb2.Empty()
 
@@ -59,7 +61,7 @@ class CounterService(counter_pb2_grpc.CounterServiceServicer):
                 grpc.StatusCode.INVALID_ARGUMENT, f"post_ids must have 1..{MAX_POST_IDS} positive integers"
             )
         user_id = request.user_id if request.user_id > 0 else None
-        async with self.backend_call(context):
+        async with self.backend_call(context, "GetCounters"):
             counters = await get_counters(self.pool, self.redis, user_id, post_ids)
         return counter_pb2.GetCountersResponse(
             counters=[
@@ -71,13 +73,14 @@ class CounterService(counter_pb2_grpc.CounterServiceServicer):
         )
 
     @asynccontextmanager
-    async def backend_call(self, context: grpc.aio.ServicerContext):
+    async def backend_call(self, context: grpc.aio.ServicerContext, operation: str):
         """Run the work. If Postgres / Redis is slow or down -> UNAVAILABLE (client may retry)."""
-        try:
-            async with self.faults.around_call():  # test-only faults, off by default
-                yield
-        except BACKEND_ERRORS as exc:
-            await context.abort(grpc.StatusCode.UNAVAILABLE, f"backend unavailable: {type(exc).__name__}")
+        with track_request("grpc", operation):
+            try:
+                async with self.faults.around_call():  # test-only faults, off by default
+                    yield
+            except BACKEND_ERRORS as exc:
+                await context.abort(grpc.StatusCode.UNAVAILABLE, f"backend unavailable: {type(exc).__name__}")
 
 
 async def check_ids(context: grpc.aio.ServicerContext, user_id: int, post_id: int) -> None:
@@ -109,6 +112,8 @@ async def serve() -> None:
     settings = get_settings()
     server, port, service = await start_server(settings, settings.grpc_port)
     log.info("gRPC server listening on port %d", port)
+    # gRPC is not HTTP/1.1, so Prometheus reads the metrics from a small separate HTTP server.
+    start_http_server(settings.grpc_metrics_port)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

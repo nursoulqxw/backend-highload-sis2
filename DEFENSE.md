@@ -24,16 +24,18 @@
 > The client deadline is 0.5 s. The server gives Postgres and Redis 200 ms each. If they are
 > slower, the server answers 503 or UNAVAILABLE at once. Nothing hangs.
 > I tested this with fault injection: the server can fail on purpose, or be slow on purpose.
-> There are 43 tests, and the reliability tests run for both protocols.
+> There are 47 tests, and the reliability tests run for both protocols.
 >
 > **4. Results (50 s).**
 > 10 thousand requests per operation, 50 at a time, the same machine and the same data.
-> - Protobuf responses are about 5.7 times smaller than JSON, because JSON repeats the field names.
-> - For likes, views and small reads, gRPC is about 3 times faster at p50 and more than 10 times
->   faster at p99, with about 4 times more throughput.
-> - gRPC meets my SLO from SIS #1, p99 under 100 ms. REST does not, at this load.
-> - With 100 posts per request, the server work is most of the time, so the speed is about the
->   same. But the payload is still 5.7 times smaller.
+> - Protobuf requests are 2 to 4 times smaller than the same data as JSON. Responses are about
+>   5.7 times smaller, because JSON repeats the field names.
+> - For likes, views and small reads, gRPC is 2 to 3 times faster at p50 and 8 to 13 times
+>   faster at p99, with about 3 times more throughput.
+> - gRPC meets my SLO from SIS #1, p99 under 100 ms, in 4 of 5 operations. REST meets it in none,
+>   at this load.
+> - With 100 posts per request, the server work is most of the time, so p50 is almost the same.
+>   gRPC just misses the SLO there, with 105 ms. But the payload is still 5.7 times smaller.
 >
 > **5. Conclusion (20 s).**
 > gRPC is the right choice inside the system, between the gateway and the services.
@@ -43,7 +45,7 @@
 ## How to show it live (if asked)
 
 ```bash
-docker compose up -d --build                      # 5 containers
+docker compose up -d --build                      # 7 containers
 curl -X PUT -H "X-User-Id: 1" localhost:8000/api/v1/posts/42/like
 curl -X PUT -H "X-User-Id: 1" localhost:8000/api/v1/posts/42/like   # again: still 1 like
 curl -H "X-User-Id: 1" "localhost:8000/api/v1/counters?post_ids=42"
@@ -70,6 +72,8 @@ Then open `benchmark/results.md` and the two charts.
 | REST retries + deadline | `clients/rest_client.py` | `send`, `backoff_seconds` |
 | Fault injection | `app/core/faults.py` | `FaultInjector.around_call` |
 | Benchmark | `benchmark/run_benchmark.py` | `run_load`, `benchmark_operation` |
+| Metrics | `app/core/metrics.py` | `track_request` |
+| Prometheus + Grafana config | `monitoring/` | `prometheus.yml`, `t7-counter.json` |
 
 ## 15 likely questions with short answers
 
@@ -77,7 +81,7 @@ Then open `benchmark/results.md` and the two charts.
 Inside the system we need speed and small messages. gRPC uses binary Protobuf, so messages are
 about 5.7x smaller. It uses HTTP/2, so many calls go over one connection at the same time.
 It has a strict contract (`.proto`), and deadlines and retries are built in.
-My benchmark shows about 3x faster p50 and more than 10x faster p99 for small calls.
+My benchmark shows 2–3x faster p50 and 8–13x faster p99 for small calls.
 
 **2. What is Protobuf?**
 A binary format for data from Google. You describe messages in a `.proto` file. Each field has
@@ -88,7 +92,8 @@ the messages is generated from the `.proto` file.
 **3. Why is JSON bigger?**
 JSON is text. It repeats every field name for every object: `"post_id"`, `"likes"`, `"views"`,
 `"liked_by_me"`. Numbers are written as text, digit by digit. For 100 posts that was 6,281 bytes
-in JSON and 1,098 bytes in Protobuf.
+in JSON and 1,098 bytes in Protobuf. REST sends its request data in the URL and a header, so in the
+benchmark I measure the same fields as JSON. That is why REST has a request size too.
 
 **4. HTTP/2 vs HTTP/1.1?**
 HTTP/1.1 sends one request at a time on a connection. To send 50 requests at once you need 50
@@ -177,3 +182,17 @@ folder is excluded.
 **Why does REST have errors in the benchmark?**
 Those calls did not finish inside the 0.5 s client deadline. Under load, the Python REST client
 is busy and its tail latency grows. They are counted in the `errors` column, not hidden.
+
+**How do Prometheus and Grafana work here?**
+Each server counts requests and measures their time with `track_request()`, and shows the numbers
+on a text page. Prometheus reads those pages every 5 s and stores the history. This is "pull":
+Prometheus asks the servers. Grafana reads from Prometheus and draws the charts.
+
+**Why does the dashboard show similar latency for REST and gRPC, but the benchmark does not?**
+The dashboard measures time inside the server. There, the work is the same `app/core` code, so
+the time is close. The benchmark measures from the client, so it also includes the client library,
+serialization outside our function, the network and waiting in queues. That is where the protocols differ.
+
+**What is the difference between a Counter and a Histogram?**
+A Counter only goes up: the number of requests. A Histogram puts each time into buckets (under 1 ms,
+under 2.5 ms, and so on). Prometheus uses the buckets to estimate p50 and p99.

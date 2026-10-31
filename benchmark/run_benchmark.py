@@ -11,6 +11,7 @@ running at the same time. We measure latency (p50, p95, p99, mean), throughput
 import argparse
 import asyncio
 import csv
+import json
 import platform
 import random
 import statistics
@@ -97,23 +98,32 @@ async def run_load(call: Callable[[int], Awaitable], first: int, count: int, con
 
 
 async def measure_rest_payload(base_url: str, operation: str) -> tuple[int, int]:
-    """Body sizes of one REST request and response (JSON)."""
+    """Sizes of one request and response as JSON.
+
+    REST sends the request data in the URL and a header, not in a body. To compare the same
+    data, we measure the same fields as the Protobuf request, written as JSON.
+    """
     user_id = USER_ID_BASE["REST"] + 999_999_999
     headers = {"X-User-Id": str(user_id)}
     async with httpx.AsyncClient(base_url=base_url) as http:
         if operation == "LikePost":
+            request_data = {"user_id": user_id, "post_id": HOT_POSTS[0]}
             response = await http.put(f"/api/v1/posts/{HOT_POSTS[0]}/like", headers=headers)
         elif operation == "RecordView":
+            request_data = {"user_id": user_id, "post_id": HOT_POSTS[0]}
             response = await http.post(f"/api/v1/posts/{HOT_POSTS[0]}/view", headers=headers)
         else:
-            ids = ",".join(map(str, post_ids_for(operation, 0)))
-            response = await http.get("/api/v1/counters", params={"post_ids": ids}, headers=headers)
+            post_ids = post_ids_for(operation, 0)
+            request_data = {"user_id": user_id, "post_ids": post_ids}
+            params = {"post_ids": ",".join(map(str, post_ids))}
+            response = await http.get("/api/v1/counters", params=params, headers=headers)
     response.raise_for_status()
-    return len(response.request.content), len(response.content)
+    request_json = json.dumps(request_data, separators=(",", ":")).encode()
+    return len(request_json), len(response.content)
 
 
 async def measure_grpc_payload(target: str, operation: str) -> tuple[int, int]:
-    """Body sizes of one gRPC request and response (Protobuf)."""
+    """Sizes of one request and response as Protobuf."""
     user_id = USER_ID_BASE["gRPC"] + 999_999_999
     async with grpc.aio.insecure_channel(target) as channel:
         stub = counter_pb2_grpc.CounterServiceStub(channel)
@@ -200,9 +210,9 @@ def save_markdown(results: list[Result], args, path: Path) -> None:
         "",
         "How many times gRPC is better (bigger = better for gRPC; below 1.0x = REST is better).",
         "",
-        "| Operation | p50 faster | p99 faster | more RPS | response smaller | "
+        "| Operation | p50 faster | p99 faster | more RPS | request smaller | response smaller | "
         f"REST p99 < {SLO_P99_MS} ms | gRPC p99 < {SLO_P99_MS} ms |",
-        "|---|---:|---:|---:|---:|:---:|:---:|",
+        "|---|---:|---:|---:|---:|---:|:---:|:---:|",
     ]
     for operation in OPERATIONS:
         rest_result, grpc_result = by_key[("REST", operation)], by_key[("gRPC", operation)]
@@ -210,17 +220,20 @@ def save_markdown(results: list[Result], args, path: Path) -> None:
             f"| {operation} | {ratio(rest_result.p50_ms, grpc_result.p50_ms)} | "
             f"{ratio(rest_result.p99_ms, grpc_result.p99_ms)} | "
             f"{ratio(grpc_result.throughput_rps, rest_result.throughput_rps)} | "
+            f"{ratio(rest_result.request_bytes, grpc_result.request_bytes)} | "
             f"{ratio(rest_result.response_bytes, grpc_result.response_bytes)} | "
             f"{meets_slo(rest_result.p99_ms)} | {meets_slo(grpc_result.p99_ms)} |"
         )
 
+    lines += ["", "## Conclusion", "", *conclusion_lines(results)]
     lines += [
         "",
         "## Notes",
         "",
-        "- Payload = body only, in bytes. REST sends `user_id` in the `X-User-Id` header and `post_id` "
-        "in the URL, so its request body is 0 bytes. LikePost and RecordView answer 204 / Empty, "
-        "so their response body is 0 bytes in both protocols.",
+        "- Payload = the same data as JSON bytes vs Protobuf `SerializeToString()` bytes. The REST request "
+        "data really travels in the URL and the `X-User-Id` header, so `request B` for REST is the size of "
+        "the same fields written as JSON. HTTP and gRPC headers are not counted. LikePost and RecordView "
+        "answer 204 / Empty, so their response is 0 bytes in both protocols.",
         "- The biggest size difference is in GetCounters: JSON repeats the field names "
         '(`"post_id"`, `"likes"`, ...) for every post; Protobuf sends small field numbers '
         "and compact numbers (varints).",
@@ -243,29 +256,46 @@ def save_markdown(results: list[Result], args, path: Path) -> None:
     path.write_text("\n".join(lines))
 
 
-def print_conclusion(results: list[Result]) -> None:
+def ratio_range(ratios: list[float]) -> str:
+    return f"{min(ratios):.1f}-{max(ratios):.1f}x"
+
+
+def conclusion_lines(results: list[Result]) -> list[str]:
+    """The conclusion, computed from the results. Used in results.md and in the terminal."""
     by_key = {(r.protocol, r.operation): r for r in results}
+    pairs = {op: (by_key[("REST", op)], by_key[("gRPC", op)]) for op in OPERATIONS}
+    small_calls = [pairs[op] for op in OPERATIONS if op != "GetCounters x100"]
+    big_rest, big_grpc = pairs["GetCounters x100"]
+    slo_rest = sum(r.p99_ms < SLO_P99_MS for r, _ in pairs.values())
+    slo_grpc = sum(g.p99_ms < SLO_P99_MS for _, g in pairs.values())
+    request_ratios = [r.request_bytes / g.request_bytes for r, g in pairs.values()]
+    response_ratios = [r.response_bytes / g.response_bytes for r, g in pairs.values() if g.response_bytes]
+    return [
+        f"- **Smaller:** Protobuf requests are {ratio_range(request_ratios)} smaller than the same data "
+        f"as JSON, and GetCounters responses are {ratio_range(response_ratios)} smaller.",
+        f"- **Faster for small calls** (like, view, GetCounters x1 and x10): gRPC p50 is "
+        f"{ratio_range([r.p50_ms / g.p50_ms for r, g in small_calls])} lower, p99 is "
+        f"{ratio_range([r.p99_ms / g.p99_ms for r, g in small_calls])} lower, throughput is "
+        f"{ratio_range([g.throughput_rps / r.throughput_rps for r, g in small_calls])} higher.",
+        f"- **GetCounters x100:** p50 {ratio(big_rest.p50_ms, big_grpc.p50_ms)}, "
+        f"p99 {ratio(big_rest.p99_ms, big_grpc.p99_ms)}, "
+        f"throughput {ratio(big_grpc.throughput_rps, big_rest.throughput_rps)}. "
+        "The speed gain is much smaller here, because the server work takes most of the time.",
+        f"- **SLO p99 < {SLO_P99_MS} ms:** REST meets it in {slo_rest} of {len(pairs)} operations, "
+        f"gRPC in {slo_grpc} of {len(pairs)}, on one process and this load.",
+        "- **Why smaller:** JSON repeats field names and writes numbers as text. Protobuf sends field "
+        "numbers and compact numbers.",
+        "- **Why faster:** the server logic is the same code. The difference comes from the rest: "
+        "JSON vs Protobuf work, HTTP/1.1 with 50 connections vs HTTP/2 with one, and a Python vs C client.",
+        "- **When REST is still fine:** public APIs for browsers and mobile apps, easy debugging with "
+        "curl, and small or rare calls, where a few bytes or a millisecond do not matter.",
+    ]
+
+
+def print_conclusion(results: list[Result]) -> None:
     print("\n=== Conclusion ===")
-    for operation in OPERATIONS:
-        rest_result, grpc_result = by_key[("REST", operation)], by_key[("gRPC", operation)]
-        print(
-            f"{operation:17} "
-            f"p50 {rest_result.p50_ms:6.2f} -> {grpc_result.p50_ms:6.2f} ms "
-            f"({ratio(rest_result.p50_ms, grpc_result.p50_ms)}), "
-            f"p99 {rest_result.p99_ms:6.2f} -> {grpc_result.p99_ms:6.2f} ms "
-            f"({ratio(rest_result.p99_ms, grpc_result.p99_ms)}), "
-            f"response {rest_result.response_bytes} -> {grpc_result.response_bytes} B"
-        )
-    rest_bytes = by_key[("REST", "GetCounters x100")].response_bytes
-    grpc_bytes = by_key[("gRPC", "GetCounters x100")].response_bytes
-    print(
-        f"\ngRPC response for 100 posts is {ratio(rest_bytes, grpc_bytes)} smaller "
-        f"({rest_bytes} B -> {grpc_bytes} B)."
-    )
-    print(
-        "REST is still fine for public APIs (browsers, mobile apps, easy debugging with curl) "
-        "and for small, rare calls, where a few bytes or a millisecond do not matter."
-    )
+    for line in conclusion_lines(results):
+        print(line.replace("**", ""))
 
 
 async def main() -> None:

@@ -11,6 +11,7 @@ httpx==0.28.1
 grpcio==1.85.0
 grpcio-tools==1.85.0
 protobuf==7.36.2
+prometheus-client==0.26.0
 
 # Tests
 pytest==9.1.1
