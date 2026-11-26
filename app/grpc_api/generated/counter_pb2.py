@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n$app/grpc_api/generated/counter.proto\x12\ncounter.v1\"\x07\n\x05\x45mpty\"/\n\x0bLikeRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\x03\x12\x0f\n\x07post_id\x18\x02 \x01(\x03\"/\n\x0bViewRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\x03\x12\x0f\n\x07post_id\x18\x02 \x01(\x03\"7\n\x12GetCountersRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\x03\x12\x10\n\x08post_ids\x18\x02 \x03(\x03\"Q\n\x0bPostCounter\x12\x0f\n\x07post_id\x18\x01 \x01(\x03\x12\r\n\x05likes\x18\x02 \x01(\x03\x12\r\n\x05views\x18\x03 \x01(\x03\x12\x13\n\x0bliked_by_me\x18\x04 \x01(\x08\"@\n\x13GetCountersResponse\x12)\n\x08\x63ounters\x18\x01 \x03(\x0b\x32\x17.counter.v1.PostCounter2\x8c\x02\n\x0e\x43ounterService\x12\x36\n\x08LikePost\x12\x17.counter.v1.LikeRequest\x1a\x11.counter.v1.Empty\x12\x38\n\nUnlikePost\x12\x17.counter.v1.LikeRequest\x1a\x11.counter.v1.Empty\x12\x38\n\nRecordView\x12\x17.counter.v1.ViewRequest\x1a\x11.counter.v1.Empty\x12N\n\x0bGetCounters\x12\x1e.counter.v1.GetCountersRequest\x1a\x1f.counter.v1.GetCountersResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n$app/grpc_api/generated/counter.proto\x12\ncounter.v1\"\x07\n\x05\x45mpty\"/\n\x0bLikeRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\x03\x12\x0f\n\x07post_id\x18\x02 \x01(\x03\"/\n\x0bViewRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\x03\x12\x0f\n\x07post_id\x18\x02 \x01(\x03\"<\n\x12RecordViewsRequest\x12&\n\x05views\x18\x01 \x03(\x0b\x32\x17.counter.v1.ViewRequest\"&\n\x13RecordViewsResponse\x12\x0f\n\x07\x63ounted\x18\x01 \x01(\x05\"7\n\x12GetCountersRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\x03\x12\x10\n\x08post_ids\x18\x02 \x03(\x03\"Q\n\x0bPostCounter\x12\x0f\n\x07post_id\x18\x01 \x01(\x03\x12\r\n\x05likes\x18\x02 \x01(\x03\x12\r\n\x05views\x18\x03 \x01(\x03\x12\x13\n\x0bliked_by_me\x18\x04 \x01(\x08\"@\n\x13GetCountersResponse\x12)\n\x08\x63ounters\x18\x01 \x03(\x0b\x32\x17.counter.v1.PostCounter2\xdc\x02\n\x0e\x43ounterService\x12\x36\n\x08LikePost\x12\x17.counter.v1.LikeRequest\x1a\x11.counter.v1.Empty\x12\x38\n\nUnlikePost\x12\x17.counter.v1.LikeRequest\x1a\x11.counter.v1.Empty\x12\x38\n\nRecordView\x12\x17.counter.v1.ViewRequest\x1a\x11.counter.v1.Empty\x12N\n\x0bRecordViews\x12\x1e.counter.v1.RecordViewsRequest\x1a\x1f.counter.v1.RecordViewsResponse\x12N\n\x0bGetCounters\x12\x1e.counter.v1.GetCountersRequest\x1a\x1f.counter.v1.GetCountersResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -37,12 +37,16 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_LIKEREQUEST']._serialized_end=108
   _globals['_VIEWREQUEST']._serialized_start=110
   _globals['_VIEWREQUEST']._serialized_end=157
-  _globals['_GETCOUNTERSREQUEST']._serialized_start=159
-  _globals['_GETCOUNTERSREQUEST']._serialized_end=214
-  _globals['_POSTCOUNTER']._serialized_start=216
-  _globals['_POSTCOUNTER']._serialized_end=297
-  _globals['_GETCOUNTERSRESPONSE']._serialized_start=299
-  _globals['_GETCOUNTERSRESPONSE']._serialized_end=363
-  _globals['_COUNTERSERVICE']._serialized_start=366
-  _globals['_COUNTERSERVICE']._serialized_end=634
+  _globals['_RECORDVIEWSREQUEST']._serialized_start=159
+  _globals['_RECORDVIEWSREQUEST']._serialized_end=219
+  _globals['_RECORDVIEWSRESPONSE']._serialized_start=221
+  _globals['_RECORDVIEWSRESPONSE']._serialized_end=259
+  _globals['_GETCOUNTERSREQUEST']._serialized_start=261
+  _globals['_GETCOUNTERSREQUEST']._serialized_end=316
+  _globals['_POSTCOUNTER']._serialized_start=318
+  _globals['_POSTCOUNTER']._serialized_end=399
+  _globals['_GETCOUNTERSRESPONSE']._serialized_start=401
+  _globals['_GETCOUNTERSRESPONSE']._serialized_end=465
+  _globals['_COUNTERSERVICE']._serialized_start=468
+  _globals['_COUNTERSERVICE']._serialized_end=816
 # @@protoc_insertion_point(module_scope)

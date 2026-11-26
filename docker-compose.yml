@@ -1,6 +1,12 @@
 x-app-env: &app-env
   DATABASE_URL: postgresql://postgres:postgres@postgres:5432/counters
   REDIS_URL: redis://redis:6379/0
+  # Each server process writes its metrics here; /metrics adds them up.
+  PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+
+# Same number of processes for REST and gRPC, so the benchmark stays fair.
+# 4 processes x 10 Postgres connections x 2 servers + worker = 82 < max_connections 100.
+x-workers: &workers "${WORKERS:-4}"
 
 services:
   postgres:
@@ -26,9 +32,11 @@ services:
 
   rest-api:
     build: .
-    # Runs the migrations first, then starts Uvicorn (1 process, the same as grpc-api: fair benchmark).
-    command: ["sh", "-c", "alembic upgrade head && uvicorn app.rest.main:app --host 0.0.0.0 --port 8000 --no-access-log"]
-    environment: *app-env
+    # Runs the migrations first, then starts Uvicorn with N processes (the same N as grpc-api).
+    command: ["sh", "-c", "rm -rf /tmp/prom && mkdir -p /tmp/prom && alembic upgrade head && exec uvicorn app.rest.main:app --host 0.0.0.0 --port 8000 --no-access-log --workers $$WORKERS"]
+    environment:
+      <<: *app-env
+      WORKERS: *workers
     ports: ["8000:8000"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -40,8 +48,10 @@ services:
 
   grpc-api:
     build: .
-    command: ["python", "-m", "app.grpc_api"]
-    environment: *app-env
+    command: ["sh", "-c", "rm -rf /tmp/prom && mkdir -p /tmp/prom && exec python -m app.grpc_api"]
+    environment:
+      <<: *app-env
+      GRPC_WORKERS: *workers
     ports: ["50051:50051", "9100:9100"]
     depends_on:
       # Wait for rest-api, because rest-api runs the migrations.

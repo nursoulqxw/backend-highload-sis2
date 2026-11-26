@@ -14,8 +14,8 @@ from clients.errors import DeadlineExceededError, ServiceUnavailableError
 
 DEFAULT_TIMEOUT_SECONDS = 0.5
 
-# Only these methods are retried. All 4 are idempotent (see README).
-IDEMPOTENT_METHODS = ["LikePost", "UnlikePost", "RecordView", "GetCounters"]
+# Only these methods are retried. All 5 are idempotent (see README).
+IDEMPOTENT_METHODS = ["LikePost", "UnlikePost", "RecordView", "RecordViews", "GetCounters"]
 
 SERVICE_CONFIG = {
     "methodConfig": [
@@ -63,6 +63,14 @@ class GrpcCounterClient:
 
     async def record_view(self, user_id: int, post_id: int) -> None:
         await self.call(self.stub.RecordView, counter_pb2.ViewRequest(user_id=user_id, post_id=post_id))
+
+    async def record_views(self, views: list[tuple[int, int]]) -> int:
+        """views = [(user_id, post_id), ...]. Returns how many were new."""
+        request = counter_pb2.RecordViewsRequest(
+            views=[counter_pb2.ViewRequest(user_id=u, post_id=p) for u, p in views]
+        )
+        response = await self.call(self.stub.RecordViews, request)
+        return response.counted
 
     async def get_counters(self, user_id: int, post_ids: list[int]) -> list[dict]:
         request = counter_pb2.GetCountersRequest(user_id=user_id, post_ids=post_ids)

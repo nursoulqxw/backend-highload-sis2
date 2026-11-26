@@ -1,7 +1,6 @@
 """Run: python -m app.grpc_api"""
 
-import asyncio
+from app.grpc_api.server import main
 
-from app.grpc_api.server import serve
-
-asyncio.run(serve())
+if __name__ == "__main__":
+    main()

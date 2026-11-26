@@ -26,6 +26,18 @@ class ViewRequest(_message.Message):
     post_id: int
     def __init__(self, user_id: _Optional[int] = ..., post_id: _Optional[int] = ...) -> None: ...
 
+class RecordViewsRequest(_message.Message):
+    __slots__ = ("views",)
+    VIEWS_FIELD_NUMBER: _ClassVar[int]
+    views: _containers.RepeatedCompositeFieldContainer[ViewRequest]
+    def __init__(self, views: _Optional[_Iterable[_Union[ViewRequest, _Mapping]]] = ...) -> None: ...
+
+class RecordViewsResponse(_message.Message):
+    __slots__ = ("counted",)
+    COUNTED_FIELD_NUMBER: _ClassVar[int]
+    counted: int
+    def __init__(self, counted: _Optional[int] = ...) -> None: ...
+
 class GetCountersRequest(_message.Message):
     __slots__ = ("user_id", "post_ids")
     USER_ID_FIELD_NUMBER: _ClassVar[int]
