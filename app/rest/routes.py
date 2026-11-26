@@ -8,8 +8,8 @@ from app.core.counters import get_counters
 from app.core.faults import FaultInjector
 from app.core.likes import like_post, unlike_post
 from app.core.metrics import track_request
-from app.core.views import record_view
-from app.rest.schemas import PostCounterOut
+from app.core.views import record_view, record_views
+from app.rest.schemas import PostCounterOut, RecordViewsIn, RecordViewsOut
 
 router = APIRouter(prefix="/api/v1")
 
@@ -76,6 +76,15 @@ async def view(
         async with faults.around_call():  # test-only faults, off by default
             await record_view(pool, redis, user_id, post_id)
     return Response(status_code=204)
+
+
+@router.post("/views:batch", response_model=RecordViewsOut)
+async def views_batch(body: RecordViewsIn, pool: PoolDep, redis: RedisDep, faults: FaultsDep):
+    """Many views in one call (for the API Gateway). The same as gRPC RecordViews."""
+    with track_request("rest", "RecordViews"):
+        async with faults.around_call():
+            counted = await record_views(pool, redis, [(v.user_id, v.post_id) for v in body.views])
+    return RecordViewsOut(counted=counted)
 
 
 @router.get("/counters", response_model=list[PostCounterOut])

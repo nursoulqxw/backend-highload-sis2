@@ -4,11 +4,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from app.config import get_settings
 from app.core.errors import BACKEND_ERRORS
 from app.core.faults import FaultInjector
+from app.core.metrics import render_metrics
 from app.core.resources import create_pool, create_redis
 from app.rest.routes import router
 
@@ -56,4 +57,4 @@ async def health(request: Request):
 @app.get("/metrics", include_in_schema=False)
 async def metrics() -> Response:
     """Prometheus reads this page every 5 s."""
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(render_metrics(), media_type=CONTENT_TYPE_LATEST)

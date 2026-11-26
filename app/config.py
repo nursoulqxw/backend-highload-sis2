@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://postgres:postgres@localhost:5432/counters"
     redis_url: str = "redis://localhost:6379/0"
     db_pool_min: int = 2
-    db_pool_max: int = 20
+    db_pool_max: int = 10  # per process! N processes x 10 must stay below Postgres max_connections
 
     # Server-side timeouts: if Postgres or Redis is slower than this, we give up
     # and answer 503 (REST) / UNAVAILABLE (gRPC). We never hang.
@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # gRPC server
     grpc_port: int = 50051
     grpc_metrics_port: int = 9100
+    # How many server processes. Python runs one thread of code at a time (GIL),
+    # so one process uses at most one CPU core. N processes share one port (SO_REUSEPORT).
+    grpc_workers: int = 1
 
     # Sync Worker
     sync_interval_seconds: float = 5.0

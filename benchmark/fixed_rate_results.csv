@@ -1,0 +1,11 @@
+protocol,operation,target_rps,achieved_rps,errors,mean_ms,p50_ms,p95_ms,p99_ms
+REST,LikePost,300,299.8,1,23.8,2.72,168.59,378.06
+gRPC,LikePost,300,299.9,0,11.38,2.27,42.99,308.13
+REST,RecordView,300,299.9,0,3.69,2.55,3.85,44.16
+gRPC,RecordView,300,299.9,0,2.32,2.21,3.27,4.66
+REST,GetCounters x1,300,299.9,0,2.83,2.62,3.41,9.26
+gRPC,GetCounters x1,300,300.0,0,2.3,2.25,3.21,4.0
+REST,GetCounters x10,300,300.0,0,2.72,2.7,3.42,3.87
+gRPC,GetCounters x10,300,299.9,0,2.47,2.35,3.29,4.47
+REST,GetCounters x100,300,300.0,0,3.84,3.67,4.92,7.34
+gRPC,GetCounters x100,300,299.9,0,2.91,2.86,3.56,4.75

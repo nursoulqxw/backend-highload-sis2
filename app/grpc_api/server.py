@@ -1,16 +1,20 @@
 """gRPC server. It only translates Protobuf <-> app/core functions.
 
-Run: python -m app.grpc_api
+Run: python -m app.grpc_api   (GRPC_WORKERS=4 -> 4 processes on the same port)
 """
 
 import asyncio
 import logging
+import multiprocessing
+import os
 import signal
+import threading
 from contextlib import asynccontextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import asyncpg
 import grpc
-from prometheus_client import start_http_server
+from prometheus_client import CONTENT_TYPE_LATEST
 from redis.asyncio import Redis
 
 from app.config import Settings, get_settings
@@ -18,14 +22,15 @@ from app.core.counters import get_counters
 from app.core.errors import BACKEND_ERRORS
 from app.core.faults import FaultInjector
 from app.core.likes import like_post, unlike_post
-from app.core.metrics import track_request
+from app.core.metrics import render_metrics, track_request
 from app.core.resources import create_pool, create_redis
-from app.core.views import record_view
+from app.core.views import record_view, record_views
 from app.grpc_api.generated import counter_pb2, counter_pb2_grpc
 
 log = logging.getLogger("grpc_api")
 
 MAX_POST_IDS = 100
+MAX_BATCH = 1000
 
 
 class CounterService(counter_pb2_grpc.CounterServiceServicer):
@@ -53,6 +58,16 @@ class CounterService(counter_pb2_grpc.CounterServiceServicer):
         async with self.backend_call(context, "RecordView"):
             await record_view(self.pool, self.redis, request.user_id, request.post_id)
         return counter_pb2.Empty()
+
+    async def RecordViews(self, request, context):
+        views = [(v.user_id, v.post_id) for v in request.views]
+        if not views or len(views) > MAX_BATCH or any(u <= 0 or p <= 0 for u, p in views):
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, f"views must have 1..{MAX_BATCH} items with positive ids"
+            )
+        async with self.backend_call(context, "RecordViews"):
+            counted = await record_views(self.pool, self.redis, views)
+        return counter_pb2.RecordViewsResponse(counted=counted)
 
     async def GetCounters(self, request, context):
         post_ids = list(dict.fromkeys(request.post_ids))  # remove duplicates, keep order
@@ -94,7 +109,9 @@ async def start_server(settings: Settings, port: int) -> tuple[grpc.aio.Server, 
     redis = create_redis(settings)
     service = CounterService(pool, redis, FaultInjector.from_settings(settings))
 
-    server = grpc.aio.server()
+    # so_reuseport: several processes can listen on the same port. The Linux kernel
+    # gives each new TCP connection to one of them.
+    server = grpc.aio.server(options=[("grpc.so_reuseport", 1)])
     counter_pb2_grpc.add_CounterServiceServicer_to_server(service, server)
     bound_port = server.add_insecure_port(f"[::]:{port}")
     await server.start()
@@ -107,13 +124,11 @@ async def stop_server(server: grpc.aio.Server, service: CounterService, grace: f
     await service.pool.close()
 
 
-async def serve() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+async def serve_worker() -> None:
+    """One server process."""
     settings = get_settings()
     server, port, service = await start_server(settings, settings.grpc_port)
-    log.info("gRPC server listening on port %d", port)
-    # gRPC is not HTTP/1.1, so Prometheus reads the metrics from a small separate HTTP server.
-    start_http_server(settings.grpc_metrics_port)
+    log.info("gRPC worker pid=%d listening on port %d", os.getpid(), port)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -122,4 +137,55 @@ async def serve() -> None:
     await stop.wait()
 
     await stop_server(server, service)
+    log.info("worker pid=%d stopped", os.getpid())
+
+
+def _run_worker() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    asyncio.run(serve_worker())
+
+
+class _MetricsHandler(BaseHTTPRequestHandler):
+    """gRPC is not plain HTTP, so Prometheus reads the metrics from this small HTTP server."""
+
+    def do_GET(self):
+        body = render_metrics()
+        self.send_response(200)
+        self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def main() -> None:
+    """Parent process: start N workers and the metrics page, wait for SIGTERM."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    settings = get_settings()
+    # "spawn" = start each worker as a fresh Python. gRPC must not be copied by fork().
+    ctx = multiprocessing.get_context("spawn")
+    workers = [ctx.Process(target=_run_worker, daemon=False) for _ in range(settings.grpc_workers)]
+    for w in workers:
+        w.start()
+    log.info("started %d gRPC workers", len(workers))
+
+    metrics = ThreadingHTTPServer(("0.0.0.0", settings.grpc_metrics_port), _MetricsHandler)
+
+    def shutdown() -> None:
+        for w in workers:
+            if w.is_alive():
+                w.terminate()  # SIGTERM -> graceful stop in the worker
+        metrics.shutdown()  # makes serve_forever() return
+
+    def on_signal(*_) -> None:
+        # shutdown() waits for serve_forever(), so it must run in another thread.
+        threading.Thread(target=shutdown).start()
+
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+    metrics.serve_forever()
+    for w in workers:
+        w.join()
     log.info("stopped")

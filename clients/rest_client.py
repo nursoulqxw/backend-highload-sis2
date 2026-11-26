@@ -6,7 +6,7 @@ The retry rules are the same as the gRPC retryPolicy in clients/grpc_client.py:
 - before each retry wait random(0, backoff), backoff = 50 ms, 100 ms, 200 ms (max);
 - never go past the deadline: every attempt only gets the time that is left.
 
-All 4 operations are idempotent (see README), so all of them may be retried.
+All 5 operations are idempotent (see README), so all of them may be retried.
 """
 
 import asyncio
@@ -57,14 +57,27 @@ class RestCounterClient:
     async def record_view(self, user_id: int, post_id: int) -> None:
         await self.send("POST", f"/api/v1/posts/{post_id}/view", user_id)
 
+    async def record_views(self, views: list[tuple[int, int]]) -> int:
+        """views = [(user_id, post_id), ...]. Returns how many were new."""
+        body = {"views": [{"user_id": u, "post_id": p} for u, p in views]}
+        response = await self.send("POST", "/api/v1/views:batch", None, json=body)
+        return response.json()["counted"]
+
     async def get_counters(self, user_id: int, post_ids: list[int]) -> list[dict]:
         params = {"post_ids": ",".join(map(str, post_ids))}
         response = await self.send("GET", "/api/v1/counters", user_id, params)
         return response.json()
 
-    async def send(self, method: str, path: str, user_id: int, params: dict | None = None) -> httpx.Response:
+    async def send(
+        self,
+        method: str,
+        path: str,
+        user_id: int | None,
+        params: dict | None = None,
+        json: dict | None = None,
+    ) -> httpx.Response:
         deadline = time.monotonic() + self.timeout
-        headers = {"X-User-Id": str(user_id)}
+        headers = {"X-User-Id": str(user_id)} if user_id else {}
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             time_left = deadline - time.monotonic()
@@ -73,7 +86,9 @@ class RestCounterClient:
             try:
                 # asyncio.timeout limits the WHOLE attempt (httpx timeouts are per phase).
                 async with asyncio.timeout(time_left):
-                    response = await self.http.request(method, path, headers=headers, params=params)
+                    response = await self.http.request(
+                        method, path, headers=headers, params=params, json=json
+                    )
             except (TimeoutError, httpx.TimeoutException) as exc:
                 # This attempt used all the time that was left -> no time for a retry.
                 raise DeadlineExceededError(f"{method} {path}: deadline of {self.timeout}s exceeded") from exc

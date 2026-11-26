@@ -49,6 +49,11 @@ class CounterServiceStub:
                 request_serializer=app_dot_grpc__api_dot_generated_dot_counter__pb2.ViewRequest.SerializeToString,
                 response_deserializer=app_dot_grpc__api_dot_generated_dot_counter__pb2.Empty.FromString,
                 _registered_method=True)
+        self.RecordViews = channel.unary_unary(
+                '/counter.v1.CounterService/RecordViews',
+                request_serializer=app_dot_grpc__api_dot_generated_dot_counter__pb2.RecordViewsRequest.SerializeToString,
+                response_deserializer=app_dot_grpc__api_dot_generated_dot_counter__pb2.RecordViewsResponse.FromString,
+                _registered_method=True)
         self.GetCounters = channel.unary_unary(
                 '/counter.v1.CounterService/GetCounters',
                 request_serializer=app_dot_grpc__api_dot_generated_dot_counter__pb2.GetCountersRequest.SerializeToString,
@@ -77,6 +82,15 @@ class CounterServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RecordViews(self, request, context):
+        """Many views in one call. The API Gateway collects views for ~50 ms and sends them
+        together: 20K views/s = 200 calls/s of 100 views, instead of 20K calls/s.
+        Idempotent: each (user, post) is deduped, so the whole batch may be retried.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def GetCounters(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -100,6 +114,11 @@ def add_CounterServiceServicer_to_server(servicer, server):
                     servicer.RecordView,
                     request_deserializer=app_dot_grpc__api_dot_generated_dot_counter__pb2.ViewRequest.FromString,
                     response_serializer=app_dot_grpc__api_dot_generated_dot_counter__pb2.Empty.SerializeToString,
+            ),
+            'RecordViews': grpc.unary_unary_rpc_method_handler(
+                    servicer.RecordViews,
+                    request_deserializer=app_dot_grpc__api_dot_generated_dot_counter__pb2.RecordViewsRequest.FromString,
+                    response_serializer=app_dot_grpc__api_dot_generated_dot_counter__pb2.RecordViewsResponse.SerializeToString,
             ),
             'GetCounters': grpc.unary_unary_rpc_method_handler(
                     servicer.GetCounters,
@@ -188,6 +207,33 @@ class CounterService:
             '/counter.v1.CounterService/RecordView',
             app_dot_grpc__api_dot_generated_dot_counter__pb2.ViewRequest.SerializeToString,
             app_dot_grpc__api_dot_generated_dot_counter__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RecordViews(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/counter.v1.CounterService/RecordViews',
+            app_dot_grpc__api_dot_generated_dot_counter__pb2.RecordViewsRequest.SerializeToString,
+            app_dot_grpc__api_dot_generated_dot_counter__pb2.RecordViewsResponse.FromString,
             options,
             channel_credentials,
             insecure,
