@@ -1,0 +1,63 @@
+# SIS #3 "after": database tuning on top of docker-compose.yml.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.db.yml up -d --build
+#
+# Adds: tuned Postgres settings (db/postgresql.conf), a streaming read replica, PgBouncer (transaction pooling).
+# The APIs then talk to PgBouncer, not to Postgres directly. GetCounters reads the replica.
+
+x-app-db: &app-db
+  DB_BEHIND_PGBOUNCER: "true"
+  DATABASE_URL: postgresql://postgres:postgres@pgbouncer:6432/counters
+  # Set DATABASE_READ_URL= (empty) to read from the primary: the "without replica" run.
+  DATABASE_READ_URL: ${DATABASE_READ_URL-postgresql://postgres:postgres@pgbouncer:6432/counters_ro}
+
+services:
+  postgres:
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./db/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+
+  postgres-replica:
+    image: postgres:16-alpine
+    entrypoint: ["/replica-entrypoint.sh"]
+    command: ["-c", "config_file=/etc/postgresql/postgresql.conf"]
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata-replica:/var/lib/postgresql/data
+      - ./db/replica/entrypoint.sh:/replica-entrypoint.sh:ro
+      - ./db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./db/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d counters"]
+      interval: 3s
+      retries: 200   # the first start copies the whole primary
+
+  pgbouncer:
+    build: ./db/pgbouncer
+    ports: ["6432:6432"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      postgres-replica: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 6432 -U postgres -d counters"]
+      interval: 2s
+      retries: 30
+
+  rest-api:
+    environment: *app-db
+    depends_on:
+      pgbouncer: { condition: service_healthy }
+
+  grpc-api:
+    environment: *app-db
+
+  sync-worker:
+    environment: *app-db
+
+volumes:
+  pgdata-replica:

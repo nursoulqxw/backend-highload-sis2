@@ -25,6 +25,8 @@ class PostCounter:
 async def get_counters(
     pool: asyncpg.Pool, redis: Redis, user_id: int | None, post_ids: list[int]
 ) -> list[PostCounter]:
+    """`pool` may be a read replica: it only reads. A replica is a few ms behind the primary,
+    well inside the 2 s eventual consistency limit."""
     # 1. Read all hashes from Redis in one pipeline.
     pipe = redis.pipeline()
     for pid in post_ids:

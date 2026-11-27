@@ -1,0 +1,104 @@
+Pager usage is off.
+=== Q1 like: INSERT ... ON CONFLICT DO NOTHING (rolled back, so the data does not change)
+BEGIN
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Insert on likes (actual time=1.121..1.122 rows=0 loops=1)
+   Conflict Resolution: NOTHING
+   Tuples Inserted: 1
+   Conflicting Tuples: 0
+   Buffers: shared hit=63 dirtied=3
+   ->  Result (actual time=0.001..0.002 rows=1 loops=1)
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.143 ms
+ Execution Time: 1.495 ms
+(10 rows)
+
+ROLLBACK
+=== Q2 unlike: DELETE by primary key (rolled back)
+BEGIN
+                                                    QUERY PLAN                                                     
+-------------------------------------------------------------------------------------------------------------------
+ Delete on likes (actual time=2.077..2.077 rows=0 loops=1)
+   Delete on likes_p12 likes_1
+   Buffers: shared hit=10 read=3 dirtied=2
+   I/O Timings: shared read=1.517
+   InitPlan 1 (returns $0)
+     ->  Limit (actual time=1.185..1.186 rows=1 loops=1)
+           Buffers: shared hit=5 read=2
+           I/O Timings: shared read=1.029
+           ->  Index Only Scan using likes_p12_pkey on likes_p12 likes_2 (actual time=1.185..1.185 rows=1 loops=1)
+                 Index Cond: (user_id = 12345)
+                 Heap Fetches: 0
+                 Buffers: shared hit=5 read=2
+                 I/O Timings: shared read=1.029
+   ->  Index Scan using likes_p12_pkey on likes_p12 likes_1 (actual time=1.708..1.709 rows=1 loops=1)
+         Index Cond: ((user_id = 12345) AND (post_id = $0))
+         Buffers: shared hit=8 read=3
+         I/O Timings: shared read=1.517
+ Planning:
+   Buffers: shared hit=90 dirtied=1
+ Planning Time: 1.121 ms
+ Execution Time: 2.356 ms
+(21 rows)
+
+ROLLBACK
+=== Q3 cold read x1: one post
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Index Scan using post_counters_pkey on post_counters (actual time=0.709..0.710 rows=1 loops=1)
+   Index Cond: (post_id = ANY ('{31415926}'::bigint[]))
+   Buffers: shared hit=1 read=4
+   I/O Timings: shared read=0.654
+ Planning:
+   Buffers: shared hit=62
+ Planning Time: 0.391 ms
+ Execution Time: 0.722 ms
+(8 rows)
+
+=== Q3 cold read x100: 100 random posts of 50M
+                                            QUERY PLAN                                             
+---------------------------------------------------------------------------------------------------
+ Index Scan using post_counters_pkey on post_counters (actual time=0.645..45.584 rows=100 loops=1)
+   Index Cond: (post_id = ANY ($0))
+   Buffers: shared hit=205 read=298
+   I/O Timings: shared read=42.718
+   InitPlan 1 (returns $0)
+     ->  Function Scan on generate_series g (actual time=0.019..0.026 rows=100 loops=1)
+ Planning Time: 0.031 ms
+ Execution Time: 45.632 ms
+(8 rows)
+
+=== Q4 liked_by_me: one user, 20 posts
+                                            QUERY PLAN                                             
+---------------------------------------------------------------------------------------------------
+ Index Only Scan using likes_p12_pkey on likes_p12 likes (actual time=0.067..0.067 rows=0 loops=1)
+   Index Cond: (user_id = 12345)
+   Filter: (post_id = ANY (($0)::bigint[]))
+   Rows Removed by Filter: 2
+   Heap Fetches: 2
+   Buffers: shared hit=5
+   InitPlan 1 (returns $0)
+     ->  Function Scan on generate_series g (actual time=0.018..0.019 rows=20 loops=1)
+ Planning Time: 0.110 ms
+ Execution Time: 0.089 ms
+(10 rows)
+
+=== Q5 sync worker: upsert 1000 counters with unnest (rolled back)
+BEGIN
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Insert on post_counters (actual time=112.354..112.354 rows=0 loops=1)
+   Conflict Resolution: UPDATE
+   Conflict Arbiter Indexes: post_counters_pkey
+   Tuples Inserted: 0
+   Conflicting Tuples: 1000
+   Buffers: shared hit=6777 read=223 dirtied=224
+   I/O Timings: shared read=31.858
+   ->  Function Scan on generate_series p (actual time=0.044..0.188 rows=1000 loops=1)
+ Planning Time: 0.034 ms
+ Execution Time: 112.439 ms
+(10 rows)
+
+ROLLBACK

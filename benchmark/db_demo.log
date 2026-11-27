@@ -1,0 +1,100 @@
+=== direct connections, 8 processes
+ Container backend-highload-sis2-redis-1 Running 
+ Container backend-highload-sis2-postgres-1 Running 
+ Container backend-highload-sis2-rest-api-1 Recreate 
+ Container backend-highload-sis2-rest-api-1 Recreated 
+ Container backend-highload-sis2-grpc-api-1 Recreate 
+ Container backend-highload-sis2-sync-worker-1 Recreate 
+ Container backend-highload-sis2-sync-worker-1 Recreated 
+ Container backend-highload-sis2-grpc-api-1 Recreated 
+ Container backend-highload-sis2-postgres-1 Waiting 
+ Container backend-highload-sis2-redis-1 Waiting 
+ Container backend-highload-sis2-postgres-1 Healthy 
+ Container backend-highload-sis2-redis-1 Healthy 
+ Container backend-highload-sis2-rest-api-1 Starting 
+ Container backend-highload-sis2-rest-api-1 Started 
+ Container backend-highload-sis2-rest-api-1 Waiting 
+ Container backend-highload-sis2-rest-api-1 Waiting 
+ Container backend-highload-sis2-rest-api-1 Healthy 
+ Container backend-highload-sis2-grpc-api-1 Starting 
+ Container backend-highload-sis2-rest-api-1 Healthy 
+ Container backend-highload-sis2-sync-worker-1 Starting 
+ Container backend-highload-sis2-grpc-api-1 Started 
+ Container backend-highload-sis2-sync-worker-1 Started 
+ Container backend-highload-sis2-sync-worker-1 Waiting 
+ Container backend-highload-sis2-redis-1 Waiting 
+ Container backend-highload-sis2-grpc-api-1 Waiting 
+ Container backend-highload-sis2-rest-api-1 Waiting 
+ Container backend-highload-sis2-postgres-1 Waiting 
+ Container backend-highload-sis2-rest-api-1 Healthy 
+ Container backend-highload-sis2-sync-worker-1 Healthy 
+ Container backend-highload-sis2-postgres-1 Healthy 
+ Container backend-highload-sis2-redis-1 Healthy 
+ Container backend-highload-sis2-grpc-api-1 Healthy 
+time="2026-11-27T18:04:33Z" level=warning msg="Insufficient VUs, reached 200 active VUs and cannot initialize more" executor=constant-arrival-rate scenario=likes
+time="2026-11-27T18:04:33Z" level=warning msg="Insufficient VUs, reached 300 active VUs and cannot initialize more" executor=constant-arrival-rate scenario=reads
+{"protocol":"grpc","likes_per_s":1000,"reads_per_s":1500,"duration":"30s","calls":38590,"failed_calls":9527,"dropped_calls":36411,"like_ms":{"p50":331.98866699999996,"p95":487.2337392499999,"p99":505.60740649999997,"max":571.046542,"avg":324.51287631292166},"read_ms":{"p50":349.554042,"p95":498.0328544,"p99":510.17214304,"max":588.154958,"avg":342.86932081110047}}
+errors in the grpc-api log (direct):
+  10 TooManyConnectionsError
+   5 too many clients
+=== through PgBouncer, 8 processes (reads from the primary, to isolate PgBouncer)
+ Container backend-highload-sis2-redis-1 Running 
+ Container backend-highload-sis2-postgres-1 Recreate 
+ Container backend-highload-sis2-postgres-1 Recreated 
+ Container backend-highload-sis2-postgres-replica-1 Creating 
+ Container backend-highload-sis2-postgres-replica-1 Created 
+ Container backend-highload-sis2-pgbouncer-1 Creating 
+ Container backend-highload-sis2-pgbouncer-1 Created 
+ Container backend-highload-sis2-rest-api-1 Recreate 
+ Container backend-highload-sis2-rest-api-1 Recreated 
+ Container backend-highload-sis2-sync-worker-1 Recreate 
+ Container backend-highload-sis2-grpc-api-1 Recreate 
+ Container backend-highload-sis2-sync-worker-1 Recreated 
+ Container backend-highload-sis2-grpc-api-1 Recreated 
+ Container backend-highload-sis2-postgres-1 Starting 
+ Container backend-highload-sis2-postgres-1 Started 
+ Container backend-highload-sis2-postgres-1 Waiting 
+ Container backend-highload-sis2-postgres-1 Healthy 
+ Container backend-highload-sis2-postgres-replica-1 Starting 
+ Container backend-highload-sis2-postgres-replica-1 Started 
+ Container backend-highload-sis2-postgres-replica-1 Waiting 
+ Container backend-highload-sis2-postgres-1 Waiting 
+ Container backend-highload-sis2-postgres-1 Healthy 
+ Container backend-highload-sis2-postgres-replica-1 Healthy 
+ Container backend-highload-sis2-pgbouncer-1 Starting 
+ Container backend-highload-sis2-pgbouncer-1 Started 
+ Container backend-highload-sis2-postgres-1 Waiting 
+ Container backend-highload-sis2-redis-1 Waiting 
+ Container backend-highload-sis2-pgbouncer-1 Waiting 
+ Container backend-highload-sis2-redis-1 Healthy 
+ Container backend-highload-sis2-postgres-1 Healthy 
+ Container backend-highload-sis2-pgbouncer-1 Healthy 
+ Container backend-highload-sis2-rest-api-1 Starting 
+ Container backend-highload-sis2-rest-api-1 Started 
+ Container backend-highload-sis2-rest-api-1 Waiting 
+ Container backend-highload-sis2-rest-api-1 Waiting 
+ Container backend-highload-sis2-rest-api-1 Healthy 
+ Container backend-highload-sis2-grpc-api-1 Starting 
+ Container backend-highload-sis2-rest-api-1 Healthy 
+ Container backend-highload-sis2-sync-worker-1 Starting 
+ Container backend-highload-sis2-grpc-api-1 Started 
+ Container backend-highload-sis2-sync-worker-1 Started 
+ Container backend-highload-sis2-redis-1 Waiting 
+ Container backend-highload-sis2-pgbouncer-1 Waiting 
+ Container backend-highload-sis2-rest-api-1 Waiting 
+ Container backend-highload-sis2-grpc-api-1 Waiting 
+ Container backend-highload-sis2-postgres-1 Waiting 
+ Container backend-highload-sis2-postgres-replica-1 Waiting 
+ Container backend-highload-sis2-sync-worker-1 Waiting 
+ Container backend-highload-sis2-pgbouncer-1 Healthy 
+ Container backend-highload-sis2-rest-api-1 Healthy 
+ Container backend-highload-sis2-redis-1 Healthy 
+ Container backend-highload-sis2-postgres-replica-1 Healthy 
+ Container backend-highload-sis2-sync-worker-1 Healthy 
+ Container backend-highload-sis2-postgres-1 Healthy 
+ Container backend-highload-sis2-grpc-api-1 Healthy 
+time="2026-11-27T18:05:23Z" level=warning msg="Insufficient VUs, reached 200 active VUs and cannot initialize more" executor=constant-arrival-rate scenario=likes
+time="2026-11-27T18:05:23Z" level=warning msg="Insufficient VUs, reached 300 active VUs and cannot initialize more" executor=constant-arrival-rate scenario=reads
+{"protocol":"grpc","likes_per_s":1000,"reads_per_s":1500,"duration":"30s","calls":32915,"failed_calls":14369,"dropped_calls":42087,"like_ms":{"p50":408.2214375,"p95":501.79801525,"p99":516.27337198,"max":594.175584,"avg":386.3673096039363},"read_ms":{"p50":432.063958,"p95":502.7664375,"p99":520.0130895,"max":593.761834,"avg":414.03938136878}}
+errors in the grpc-api log (pgbouncer):
+=== demo done

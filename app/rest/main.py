@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.core.errors import BACKEND_ERRORS
 from app.core.faults import FaultInjector
 from app.core.metrics import render_metrics
-from app.core.resources import create_pool, create_redis
+from app.core.resources import create_pool, create_read_pool, create_redis
 from app.rest.routes import router
 
 
@@ -18,12 +18,15 @@ from app.rest.routes import router
 async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.pool = await create_pool(settings)
+    app.state.read_pool = await create_read_pool(settings, app.state.pool)
     app.state.redis = create_redis(settings)
     app.state.faults = FaultInjector.from_settings(settings)
     try:
         yield
     finally:
         await app.state.redis.aclose()
+        if app.state.read_pool is not app.state.pool:
+            await app.state.read_pool.close()
         await app.state.pool.close()
 
 
