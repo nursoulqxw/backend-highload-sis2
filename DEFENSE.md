@@ -1,198 +1,267 @@
-# Defense notes — SIS #2, T7 Like & View Counter
+# Defense notes — T7 Like & View Counter (SIS #2 and SIS #3)
+
+- SIS #2 (protocol, 20K increments/s): this file, part 1. Details: [README.md](README.md).
+- SIS #3 (database tuning): this file, part 2. Details: [SIS3.md](SIS3.md).
+  A Russian version of part 2: [DEFENSE_SIS3_RU.md](DEFENSE_SIS3_RU.md).
+
+---
+
+# Part 1. SIS #2 — protocol implementation
 
 ## 3-minute speech
 
 > **1. The task (20 s).**
-> My system is T7, a like and view counter. It must handle 20 thousand requests per second
-> and 50 million posts. In SIS #1 I chose gRPC for internal calls. In SIS #2 I implemented it,
-> added idempotency, timeouts and retries, and measured it against a REST/JSON baseline.
+> My system is T7, a like and view counter: about 20 thousand increments per second, 50 million
+> posts, eventual consistency of at most 2 seconds. In SIS #1 I chose gRPC for internal calls.
+> In SIS #2 I implemented it with idempotency, timeouts and retries, measured it against
+> REST/JSON, and showed that it takes 20 thousand increments per second.
 >
 > **2. The design (40 s).**
-> There is one core module, `app/core`, with all the logic. Two thin layers sit on top of it:
-> REST with FastAPI, and gRPC with grpcio. Both call the same functions. So in the benchmark
-> the only difference is the protocol.
-> Live counters are in Redis, because it is in memory and very fast. Likes are in Postgres,
-> because the primary key `(user_id, post_id)` gives us dedupe for free. A sync worker copies
-> the counters from Redis to Postgres every 5 seconds.
+> One core module, `app/core`, has all the logic. REST (FastAPI) and gRPC (grpcio) are thin
+> layers on top of it, so in the benchmark the only difference is the protocol.
+> Live counters are in Redis. Likes are in Postgres, because the primary key `(user_id, post_id)`
+> gives us dedupe for free. A sync worker copies the counters from Redis to Postgres every 5 s.
 >
-> **3. Idempotency, timeouts, retries (50 s).**
-> All write operations are idempotent. A like is `INSERT ... ON CONFLICT DO NOTHING`, and the
-> counter changes only if a row was really inserted. A view uses Redis `SET NX` with a 1-hour TTL.
-> So if a client sends the same call twice, the result is the same.
-> This is why retries are safe. The client retries at most 3 times, only on "try again later"
-> errors (UNAVAILABLE or 503), with exponential backoff and jitter, and never after the deadline.
-> The client deadline is 0.5 s. The server gives Postgres and Redis 200 ms each. If they are
-> slower, the server answers 503 or UNAVAILABLE at once. Nothing hangs.
-> I tested this with fault injection: the server can fail on purpose, or be slow on purpose.
-> There are 47 tests, and the reliability tests run for both protocols.
+> **3. Idempotency, timeouts, retries (40 s).**
+> Every write is idempotent: a like is `INSERT ... ON CONFLICT DO NOTHING`, a view is Redis
+> `SET NX` with a 1-hour TTL. So retries are safe. The client retries at most 3 times, only on
+> UNAVAILABLE or 503, with exponential backoff and jitter, never after the 0.5 s deadline. The
+> server gives Postgres and Redis 200 ms each, then answers "try again later". 59 tests, and the
+> reliability tests run for both protocols.
 >
-> **4. Results (50 s).**
-> 10 thousand requests per operation, 50 at a time, the same machine and the same data.
-> - Protobuf requests are 2 to 4 times smaller than the same data as JSON. Responses are about
->   5.7 times smaller, because JSON repeats the field names.
-> - For likes, views and small reads, gRPC is 2 to 3 times faster at p50 and 8 to 13 times
->   faster at p99, with about 3 times more throughput.
-> - gRPC meets my SLO from SIS #1, p99 under 100 ms, in 4 of 5 operations. REST meets it in none,
->   at this load.
-> - With 100 posts per request, the server work is most of the time, so p50 is almost the same.
->   gRPC just misses the SLO there, with 105 ms. But the payload is still 5.7 times smaller.
+> **4. How I reached 20K (40 s).**
+> One Python process gave only about 2,000 requests per second: Python runs one thread of code at
+> a time, so one process is one CPU core. 20,000 one-by-one calls would need about 9 cores. So:
+> each view is one Lua script in Redis (one round trip instead of three), each server runs 4
+> processes, and the API Gateway sends views in batches of 100. 20 thousand views per second become
+> 200 calls per second. Likes stay one by one, because a user waits for the answer.
 >
-> **5. Conclusion (20 s).**
-> gRPC is the right choice inside the system, between the gateway and the services.
-> REST stays outside, for browsers and mobile apps, because everyone understands it and it is
-> easy to debug.
+> **5. Results (30 s).**
+> With k6 at a fixed rate: 20,001 increments per second for 60 s, 0 errors, p99 13 ms, and a new
+> view is visible in a read after 15 ms at p99, against the 2 s requirement. At 20K both protocols
+> keep up; at 40K gRPC degrades less, p99 105 against 196 ms. A batch of 100 views is 3.2 times
+> smaller in Protobuf.
+>
+> **6. Conclusion (10 s).**
+> The biggest win for 20K was batching, then the protocol. gRPC inside the system, REST outside
+> for browsers and mobile apps.
 
 ## How to show it live (if asked)
 
 ```bash
-docker compose up -d --build                      # 7 containers
+docker compose up -d --build                      # REST + gRPC (4 processes each), Postgres, Redis, worker
 curl -X PUT -H "X-User-Id: 1" localhost:8000/api/v1/posts/42/like
 curl -X PUT -H "X-User-Id: 1" localhost:8000/api/v1/posts/42/like   # again: still 1 like
 curl -H "X-User-Id: 1" "localhost:8000/api/v1/counters?post_ids=42"
-pytest tests/test_reliability.py -v               # idempotency, timeouts, retries, both protocols
-make lint                                         # code style
+curl -X POST -H "Content-Type: application/json" localhost:8000/api/v1/views:batch \
+     -d '{"views": [{"user_id": 2, "post_id": 42}, {"user_id": 2, "post_id": 42}]}'   # counted: 1
+pytest tests/test_reliability.py tests/test_batch.py -v   # idempotency, retries, batch, both protocols
 ```
 
-Then open `benchmark/results.md` and the two charts.
+Then open `benchmark/load_results.md` (20K) and `benchmark/results.md` (one call at a time).
 
 ## Map: where is each thing in the code?
 
 | Topic | File | Function / place |
 |---|---|---|
 | Like / unlike logic | `app/core/likes.py` | `like_post`, `unlike_post` |
-| View logic | `app/core/views.py` | `record_view` |
+| View logic | `app/core/views.py` | `record_view`, `record_views` (batch) |
+| Lua scripts: +1 / view / batch of views, cold key | `app/core/cache.py` | `INCR_SCRIPT`, `VIEW_SCRIPT`, `VIEW_BATCH_SCRIPT`, `load_from_db` |
 | Get counters (cache-aside) | `app/core/counters.py` | `get_counters` |
-| Cold key rule | `app/core/cache.py` | `ensure_loaded` |
-| gRPC contract | `proto/counter.proto` | `service CounterService` |
-| gRPC server | `app/grpc_api/server.py` | `CounterService` class |
-| REST server | `app/rest/routes.py`, `app/rest/main.py` | the 4 routes, 503 handler |
+| gRPC contract | `proto/counter.proto` | `service CounterService` (5 methods) |
+| gRPC server, N processes | `app/grpc_api/server.py` | `CounterService`, `main` (spawn + `SO_REUSEPORT`) |
+| REST server | `app/rest/routes.py`, `app/rest/main.py` | 5 routes, 503 handler |
 | Server timeouts (200 ms) | `app/core/resources.py` | `command_timeout`, `socket_timeout` |
-| 503 / UNAVAILABLE mapping | `app/core/errors.py` + `app/rest/main.py` + `app/grpc_api/server.py` | `BACKEND_ERRORS`, `backend_call` |
+| 503 / UNAVAILABLE mapping | `app/core/errors.py`, `app/rest/main.py`, `app/grpc_api/server.py` | `BACKEND_ERRORS`, `backend_call` |
 | gRPC retries + deadline | `clients/grpc_client.py` | `SERVICE_CONFIG`, `timeout=0.5` |
 | REST retries + deadline | `clients/rest_client.py` | `send`, `backoff_seconds` |
 | Fault injection | `app/core/faults.py` | `FaultInjector.around_call` |
-| Benchmark | `benchmark/run_benchmark.py` | `run_load`, `benchmark_operation` |
-| Metrics | `app/core/metrics.py` | `track_request` |
-| Prometheus + Grafana config | `monitoring/` | `prometheus.yml`, `t7-counter.json` |
+| 20K load test | `loadtest/increments.js`, `benchmark/run_load.py` | k6 fixed rate, `run_matrix` |
+| One-call benchmark | `benchmark/run_benchmark.py` | `run_load` |
+| Metrics (all processes) | `app/core/metrics.py` | `track_request`, `render_metrics` |
 
-## 15 likely questions with short answers
+## Likely questions with short answers
 
 **1. Why gRPC and not REST?**
-Inside the system we need speed and small messages. gRPC uses binary Protobuf, so messages are
-about 5.7x smaller. It uses HTTP/2, so many calls go over one connection at the same time.
-It has a strict contract (`.proto`), and deadlines and retries are built in.
-My benchmark shows 2–3x faster p50 and 8–13x faster p99 for small calls.
+Inside the system we need small messages and speed. Protobuf is binary: a batch of 100 views is
+1,293 B against 4,182 B of JSON (3.2x). HTTP/2 sends many calls over one connection. The `.proto`
+file is a strict contract, and deadlines and retries are built in. One call at a time, gRPC was
+2–2.8x faster at p50 and 8–13x at p99.
 
-**2. What is Protobuf?**
-A binary format for data from Google. You describe messages in a `.proto` file. Each field has
-a number (`user_id = 1`). On the wire, Protobuf sends the field number and the value, not the
-field name. Numbers use "varints", so small numbers take fewer bytes. Code to read and write
-the messages is generated from the `.proto` file.
+**2. How did you reach 20,000 increments per second?**
+Three steps, each measured. (1) A Lua script: a view is one Redis round trip instead of three.
+(2) 4 processes per server, because one Python process uses one CPU core. (3) Batching: the
+gateway sends 100 views per call, so 20K views/s are 200 calls/s. Result: 20,001/s, 0 errors,
+p99 13 ms, and the gRPC server used about a quarter of its CPU.
 
-**3. Why is JSON bigger?**
-JSON is text. It repeats every field name for every object: `"post_id"`, `"likes"`, `"views"`,
-`"liked_by_me"`. Numbers are written as text, digit by digit. For 100 posts that was 6,281 bytes
-in JSON and 1,098 bytes in Protobuf. REST sends its request data in the URL and a header, so in the
-benchmark I measure the same fields as JSON. That is why REST has a request size too.
+**3. Why not just more processes, without batching?**
+One by one, Python handled about 2,000–2,300 calls/s per core (the gRPC runtime itself took most
+of the time in the profile). 20,000 / 2,300 ≈ 9 cores for the server alone; the laptop has 8 for
+everything. Batching makes the per-call cost 100 times rarer. Real systems (view counters at
+YouTube scale) also count views in batches.
 
-**4. HTTP/2 vs HTTP/1.1?**
-HTTP/1.1 sends one request at a time on a connection. To send 50 requests at once you need 50
-connections. HTTP/2 has **multiplexing**: many requests (streams) at the same time on one
-connection. It also compresses headers (HPACK) and is binary. Our gRPC client used 1 connection;
-the REST client needed 50.
+**4. Is batching cheating? The requirement says 20K RPS.**
+The requirement is 20K *increments* per second. Batching is a design choice, not a trick: views
+are fire-and-forget events, and the gateway already sees them all. Each view is still deduped and
+counted one by one inside the Lua script. Likes stay unary, because the user waits for the answer.
 
-**5. What is idempotency?**
-Doing the same call twice gives the same result as doing it once. Our like: the second
-`INSERT ... ON CONFLICT DO NOTHING` inserts 0 rows, so the counter does not change. Unlike: the
-second DELETE deletes 0 rows. View: the second `SET NX` in the same hour does nothing.
+**5. Why a Lua script in Redis?**
+One network round trip instead of three, and Redis runs a script atomically: nothing can happen
+between "check", "dedupe" and "+1". The cold-key check comes first, before the dedupe key is set,
+so if Postgres fails during a cold load, the client's retry still counts the view.
 
-**6. Why `PUT` for like and not `POST` or `PATCH`?**
-A like is a state: liked or not liked. `PUT` means "set this state", and HTTP says `PUT` is
-idempotent. `POST` and `PATCH` are not idempotent by the standard: `PATCH {"likes": "+1"}`
-repeated twice gives +2. A view is an event, so it is `POST`, but we make it idempotent for
-1 hour with `SET NX`.
+**6. Why 4 processes, and how do they share a port?**
+Python's GIL runs one thread of code at a time, so one process uses at most one core. REST:
+`uvicorn --workers 4`. gRPC: 4 processes listen on the same port with `SO_REUSEPORT`, and the Linux
+kernel gives each new connection to one of them. Same number for REST and gRPC, so the comparison
+stays fair. Prometheus metrics are added up across processes (multiprocess mode).
 
-**7. Why retry only idempotent calls?**
-When a call fails, the client often does not know if the server did the work. Maybe only the
-answer was lost. If the call is not idempotent, a retry can do the work twice, for example count
-2 likes. If it is idempotent, the retry is safe. I have a test for this: the server does the
-work, then "loses" the answer, the client retries, and the count is still 1.
+**7. Why k6 at a fixed rate and not "50 requests at a time"?**
+"50 at a time" (closed model) slows down together with the server: if the server is slow, fewer
+requests are sent, so queueing is hidden. A fixed rate (open model) keeps sending, like real users,
+so p99 shows the real waiting.
 
-**8. Timeout vs deadline?**
-A **timeout** is a duration: "wait at most 0.5 s". A **deadline** is a point in time:
-"the answer must come before 12:00:00.500". gRPC sends the deadline to the server, so the server
-knows how much time is left. In our REST client we turn the timeout into a deadline. All retries
-must fit before it, and each attempt only gets the time that is left.
+**8. How do you know eventual consistency is ≤ 2 s?**
+I measured it: during the 20K test, k6 sends a view of a brand-new post 10 times per second and
+reads until it appears. p50 2 ms, p99 15 ms. Reads come from Redis, which is updated at once.
 
-**9. Why is the server timeout (200 ms) shorter than the client deadline (500 ms)?**
-If Postgres or Redis hangs, the server gives up after 200 ms and answers 503 / UNAVAILABLE.
-The client still has about 300 ms left for a retry. If the server waited longer than the
-client, the client would give up first, and the server would keep working for nobody.
+**9. What is Protobuf, and why is JSON bigger?**
+Protobuf sends a field number and the value, numbers as varints. JSON is text and repeats every
+field name for every object (`"user_id"`, `"post_id"` ... 100 times in a batch).
 
-**10. What is exponential backoff with jitter?**
-Backoff: wait before a retry, and wait longer each time (50 ms, 100 ms, max 200 ms), so we
-do not overload a server that is already in trouble. Jitter: the wait is random, from 0 up to
-that value. Without jitter, 1000 clients that failed at the same moment would all retry at the
-same moment again (a "retry storm" or "thundering herd").
+**10. HTTP/2 vs HTTP/1.1?**
+HTTP/1.1: one request at a time per connection. HTTP/2: many streams on one connection
+(multiplexing), compressed headers, binary framing.
 
-**11. Which errors do you retry?**
-Only "try again later": gRPC `UNAVAILABLE`, REST `502/503/504` or a lost connection. Not `422`
-or `INVALID_ARGUMENT`, because the request is wrong and a retry will not fix it. Not
-`DEADLINE_EXCEEDED`, because then there is no time left.
+**11. What is idempotency, and why `PUT` for a like?**
+Doing a call twice gives the same result as once. A like is a state (liked or not), so `PUT`,
+which HTTP defines as idempotent. A view is an event, so `POST`, made idempotent for 1 hour with
+`SET NX`. A whole `RecordViews` batch may be retried: the second time it counts 0 new views.
 
-**12. What do p50 and p99 mean?**
-Sort all request times. **p50** (the median) is the middle one: half of the requests were
-faster. It is the "typical" user. **p99**: 99% were faster, 1% were slower. It shows the slow
-"tail". At 20k RPS, 1% is 200 requests every second, so p99 matters a lot. That is why my SLO
-is on p99.
+**12. Timeouts: why is the server's 200 ms shorter than the client's 500 ms?**
+The server gives up on a slow Postgres or Redis and answers "try again later" while the client
+still has time for a retry. A deadline is a point in time: all retries must fit before it.
 
-**13. What do the benchmark numbers mean? Is it fair?**
-Same machine, same servers (1 process each), same database and the same `app/core` code,
-10,000 requests, concurrency 50, 500 warm-up requests. So the difference is the protocol and its
-client library. Honest limits: the Python REST client (httpx) uses a full CPU core at this load,
-and the gRPC client is written in C. That is part of the result. The benchmark runs inside
-Docker, because Docker Desktop port forwarding on a Mac slowed down REST 3–4x and gRPC not at
-all, which would be unfair.
+**13. Backoff with jitter, and which errors are retried?**
+Wait longer before each retry (random 0–50, 0–100, max 0–200 ms) so an overloaded server is not
+hit harder; random so 1,000 clients do not retry in the same instant. Only UNAVAILABLE / 502 / 503
+/ 504 or a lost connection; never a bad request, never past the deadline.
 
-**14. Why is GetCounters with 100 posts almost the same speed?**
-There the server does more work: 100 Redis reads and a SQL query. That work takes most of the
-time, so the protocol is a small part of the total. The payload is still 5.7x smaller, which
-saves network bandwidth.
+**14. p50 vs p99?**
+p50: half of the requests were faster — the typical user. p99: 1% were slower — the tail. At 20K/s
+1% is 200 requests every second, so the SLO is on p99.
 
-**15. When is REST still a good choice?**
-Public APIs for browsers and mobile apps: every client understands HTTP + JSON, and browsers
-cannot call gRPC directly. REST is easy to debug with `curl` and to read in logs. For small or
-rare calls, a few bytes or milliseconds do not matter. So: REST outside, gRPC inside.
+**15. What happens if Redis loses the data?**
+Redis writes an append-only file, synced once per second (AOF `everysec`): at most ~1 s is lost.
+Postgres has a copy in `post_counters`, at most ~5 s old, and the cold-key rule loads it back with
+`HSETNX` before the next +1, so a counter never restarts from 0.
 
-## Extra questions that may come up
+**16. When is REST still fine?**
+Public APIs for browsers and mobile apps, debugging with `curl`, rare calls. At 20K with batching
+REST also kept up (p99 12 ms); gRPC won on size and under 2x load.
 
-**What happens if Redis loses the data?**
-Postgres has a copy in `post_counters`, at most about 5 s old. The "cold key" rule loads it
-back into Redis with `HSETNX` before the next increment, so a counter never restarts from 0.
+---
 
-**What is fault injection, and is it in production?**
-Test-only settings (`FAULT_FAIL_FIRST_N`, `FAULT_FAIL_AFTER_WORK`, `FAULT_DELAY_MS`) that make
-the server fail or be slow on purpose. They are all off (0) by default.
+# Part 2. SIS #3 — database tuning
 
-**What are the strange names in `counter_pb2_grpc.py`?**
-That file is generated by `protoc` from `proto/counter.proto` (`make proto`). We never edit it.
-Its names come from the tool. Our own code is checked by `ruff` (`make lint`), and the generated
-folder is excluded.
+## 2-minute speech
 
-**Why does REST have errors in the benchmark?**
-Those calls did not finish inside the 0.5 s client deadline. Under load, the Python REST client
-is busy and its tail latency grows. They are counted in the `errors` column, not hidden.
+> **Task:** tune the database for this workload and prove every gain with numbers.
+>
+> **Data:** 50 million posts and 20 million likes, 5.8 GB — more than the 4 GB of memory, like a
+> real database.
+>
+> **Indexes:** all five queries use primary keys; EXPLAIN shows Index and Index Only Scans. An extra
+> index on `likes(post_id)` would make "who liked this post" 370 times faster, but every like 63%
+> slower at p99, and T7 has no such query, so I do not add it.
+>
+> **Partitioning:** `likes` is split by hash of `user_id` into 16 parts; every query has `user_id`,
+> so it reads 1 of 16. Partitions by day would read all 31 and were 2.3x slower — but for deleting
+> old data, dropping a partition was 130 times faster than DELETE.
+>
+> **Connection pooling:** 8 processes with pools of 10 need 160 connections, and Postgres allows
+> 100. PgBouncer keeps 30: same p99 as 94 direct connections. It first made things worse — 88%
+> errors — I found two causes in the logs and fixed them: 0.05%.
+>
+> **Read replica:** reads moved off the primary, p99 of reads 173 → 50 ms; replication lag at most
+> 0.6 s, inside the 2 s requirement.
+>
+> **Honestly:** config tuning did not speed up single queries on one laptop — the tables do not fit
+> in memory anyway, and the replica shares the CPU with the primary.
 
-**How do Prometheus and Grafana work here?**
-Each server counts requests and measures their time with `track_request()`, and shows the numbers
-on a text page. Prometheus reads those pages every 5 s and stores the history. This is "pull":
-Prometheus asks the servers. Grafana reads from Prometheus and draws the charts.
+## Every change: what → number → why
 
-**Why does the dashboard show similar latency for REST and gRPC, but the benchmark does not?**
-The dashboard measures time inside the server. There, the work is the same `app/core` code, so
-the time is close. The benchmark measures from the client, so it also includes the client library,
-serialization outside our function, the network and waiting in queues. That is where the protocols differ.
+| Change | Number | Why |
+|---|---|---|
+| Sync worker: one `unnest` statement instead of `executemany` | batch p99 44 → 23 ms | 1 parse, 1 plan, 1 round trip instead of 1,000 |
+| Index `likes(post_id)` (not kept) | read 488 → 1.3 ms; insert p99 +63% | every insert writes one more B-tree |
+| `likes` HASH(user_id) x16 | 1 of 16 partitions per query | all queries have `user_id = $1` → partition pruning |
+| DROP PARTITION vs DELETE | 9 ms vs 1,131 ms; WAL 0.06 vs 21.8 MB | DROP removes a file; DELETE touches and logs every row |
+| Pool 2 / 5 / 10 / 25 / 50 | pool 2: 5–7% failed; pool 25 best | too small = queue in the app; too big = contention |
+| PgBouncer | 30 connections instead of 94, same p99 | transaction pooling: a connection only for one transaction |
+| asyncpg `reset` off behind PgBouncer | failed 88% → 0.05% | the reset was a second transaction = 2 PgBouncer slots per query |
+| `client_connection_check_interval` | 84 "zombie" backends gone | a backend notices its client left and stops |
+| Read replica | read p99 173 → 50 ms | reads no longer compete with writes |
+| Flag (`dirty_posts`) instead of watermark | watermark: 2.3 s scan, or an index that drops HOT 100% → 0% | `updated_at` changes on every update |
+| `fillfactor = 80` | HOT got worse, 99% → 65% | replica's `hot_standby_feedback = on` stops cleanup on the primary |
+| Postgres config (cache 384 MB, SSD settings) | no measurable gain | 5.8 GB does not fit in RAM either way |
 
-**What is the difference between a Counter and a Histogram?**
-A Counter only goes up: the number of requests. A Histogram puts each time into buckets (under 1 ms,
-under 2.5 ms, and so on). Prometheus uses the buckets to estimate p50 and p99.
+## Lecture 7's six questions (slide 22, "for SIS #3")
+
+1. **Which wall?** Connections (160 > 100) and cold-key reads. Not writes.
+2. **RPO / RTO?** Likes: RPO 0 on the primary; ≤ 0.6 s if its disk is lost (async replica). Redis ≤ 1 s.
+   RTO: no automatic failover, manual promote — minutes; with Patroni, tens of seconds.
+3. **Which reads tolerate lag?** Only GetCounters → replica. The cold load before a +1 and all writes → primary.
+4. **Lag monitored and acted on?** Monitored (`pg_stat_replication`, p99 355 ms under overload).
+   Not acted on yet — next step: route reads to the primary when lag > 1 s.
+5. **Does the key prune?** Yes: EXPLAIN shows `likes_p12` only.
+6. **Pods × pool fit?** Direct no (160 > 100); PgBouncer keeps 30–40. Little's Law: 600/s × 10 ms ≈ 6 busy.
+
+## Likely questions (SIS #3)
+
+**Why no more indexes?** Every query already uses a primary key. Each extra index costs on every
+write: measured +63% p99 on a like.
+
+**Slowest query, and why can't an index fix it?** GetCounters of 100 random posts from 50M
+(p99 159 ms). It already uses the index, but 100 rows sit on ~100 pages, mostly read from disk.
+The fix is not in the database: Redis keeps the live counters, Postgres is only hit for cold keys.
+
+**Why hash by `user_id`, not by date?** Our queries filter by `user_id`, never by date. By date,
+every query reads every partition.
+
+**Why partition at all if it is not faster?** Maintenance of a table that only grows: VACUUM,
+index rebuilds and ANALYZE run on 16 small parts instead of one big table.
+
+**Why is `post_counters` not partitioned?** A read asks for 100 random `post_id`s at once — it would
+touch every partition. And it has a fixed size, nothing to drop.
+
+**Why did PgBouncer first make it worse?** (1) asyncpg reset every connection after each query —
+behind PgBouncer that is a second transaction, so each request took two slots. (2) When the app
+gave up on a query, the Postgres backend kept running and held a slot ("zombies"). Fixes: no reset,
+`client_connection_check_interval`, `max_db_connections`.
+
+**Is a bigger pool better?** No. Pool 2 queued requests (5–7% failed); 25 was best; direct
+connections grew to 94, near the 100 limit. PgBouncer kept 30 with the same p99.
+
+**Does the replica break consistency?** Lag ≤ 0.6 s (measured under overload), requirement ≤ 2 s.
+A user may not see their own like in `liked_by_me` for that long; allowed for a counter
+(Lecture 8, slide 10: eventual is "fine for likes, view counters").
+
+**Why `synchronous_commit = off` in the sync worker?** `post_counters` is a copy; Redis has the live
+values. A crash loses ~0.6 s of the copy, and the next sync rewrites it. Likes keep it on.
+
+**Why did config tuning not help?** 5.8 GB of data, 4 GB of RAM for everything: 128 or 384 MB of
+cache does not change much, and Postgres also uses the OS cache. The replica on the same laptop
+takes CPU and disk from the primary.
+
+## Show it live (SIS #3)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.db.yml up -d
+docker compose exec postgres psql -U postgres -d counters -c \
+  "EXPLAIN (ANALYZE, BUFFERS) SELECT post_id FROM likes WHERE user_id = 12345 AND post_id = ANY('{1,2,3}');"
+docker compose -f docker-compose.yml -f docker-compose.db.yml exec pgbouncer \
+  psql -h 127.0.0.1 -p 6432 -U postgres pgbouncer -c "SHOW POOLS;"
+docker compose exec postgres psql -U postgres -c "SELECT client_addr, state, replay_lag FROM pg_stat_replication;"
+cat benchmark/db_results.md
+```
