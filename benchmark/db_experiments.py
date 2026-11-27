@@ -30,7 +30,7 @@ SIZE_SQL = "SELECT pg_size_pretty(sum(pg_total_relation_size(relid))) FROM pg_pa
 
 def ms_stats(lat: list[float]) -> dict:
     lat = sorted(lat)
-    q = statistics.quantiles(lat, n=100)
+    q = statistics.quantiles(lat, n=100, method="inclusive")
     return {"p50": q[49], "p95": q[94], "p99": q[98], "max": lat[-1]}
 
 
@@ -139,8 +139,12 @@ async def e2_partitioning(pool) -> dict:
                 f"EXPLAIN (FORMAT JSON) SELECT post_id FROM {table}"
                 " WHERE user_id = 123 AND post_id = ANY('{1,2,3}')"
             )
-            scanned = json.dumps(plan).count('"Relation Name"')
-            size = await conn.fetchval(SIZE_SQL, table)
+            plan_text = plan if isinstance(plan, str) else json.dumps(plan)  # asyncpg returns JSON as text
+            scanned = plan_text.count('"Relation Name"')
+            # pg_partition_tree() returns nothing for a plain (not partitioned) table.
+            size = await conn.fetchval(SIZE_SQL, table) or await conn.fetchval(
+                "SELECT pg_size_pretty(pg_total_relation_size($1::regclass))", table
+            )
             # Remove the oldest week of data: DELETE (rows one by one) vs DROP / DETACH a partition.
             old = "created_at < date_trunc('day', now()) - interval '27 days'"
             w0 = await wal(conn)

@@ -65,7 +65,7 @@ async def run(pool: asyncpg.Pool, make_call, count: int) -> dict:
     await asyncio.gather(*(worker() for _ in range(CONCURRENCY)))
     seconds = time.perf_counter() - started
     lat.sort()
-    q = statistics.quantiles(lat, n=100)
+    q = statistics.quantiles(lat, n=100, method="inclusive")
     return {
         "calls": count,
         "per_s": count / seconds,
@@ -152,7 +152,7 @@ async def bench(label: str, scale: float) -> dict:
             upd = stats_after["n_tup_upd"] - stats_before["n_tup_upd"]
             hot = stats_after["n_tup_hot_upd"] - stats_before["n_tup_hot_upd"]
             lat.sort()
-            q = statistics.quantiles(lat, n=100)
+            q = statistics.quantiles(lat, n=100, method="inclusive")
             results[f"Q5 sync 1000 ({mode})"] = {
                 "calls": len(lat),
                 "per_s": 1000 / statistics.mean(lat) * 1000,  # rows per second

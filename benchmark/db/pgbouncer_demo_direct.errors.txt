@@ -1,0 +1,2 @@
+  10 TooManyConnectionsError
+   5 too many clients

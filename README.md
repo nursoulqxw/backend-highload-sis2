@@ -1,6 +1,9 @@
-# T7 Like & View Counter — SIS #2: Protocol implementation
+# T7 Like & View Counter — SIS #2 (protocol) and SIS #3 (database tuning)
 
 Course: Backend for Highloaded Environment.
+
+> **SIS #3 (database tuning)** is in **[SIS3.md](SIS3.md)**: schema and indexes, EXPLAIN ANALYZE,
+> partitioning, PgBouncer, read replica, before / after with p95 / p99. This README is SIS #2.
 
 **The task:** implement the service interface with the protocol from SIS #1 (we chose **gRPC**),
 with idempotency, timeouts and retries, and measure latency and payload size against a
@@ -585,3 +588,58 @@ full 20K load.
 
 **When REST is still fine:** public APIs for browsers and mobile apps, simple tools,
 easy debugging with `curl`, and small or rare calls where a few bytes and milliseconds do not matter.
+
+### Part 4. 20K increments/s
+
+Full results: [benchmark/load_results.md](benchmark/load_results.md). Script:
+[benchmark/run_load.py](benchmark/run_load.py) (runs k6 with [loadtest/increments.js](loadtest/increments.js)).
+
+**How we measure:** k6 sends requests at a **fixed rate** (open model): new requests come even
+if the server is slow, so queueing shows up in p99. The old benchmark (Part 3, "50 at a time")
+slows down together with the server and hides that. Workload: 95% views, 5% likes, every
+(user, post) pair new; 90% of increments go to 100K hot posts, 10% to any of 50M posts.
+
+**Step 1 — the problem.** One Python process per server reached only **~2,000 RPS**. A profile
+(py-spy) showed ~75% of the time in the gRPC / asyncio runtime itself, not in our code. Python
+runs one thread of code at a time (the GIL), so one process = one CPU core ≈ 2,000–2,300 calls/s.
+20,000 / 2,300 ≈ **9 cores** just for one call per increment — more than the whole laptop has.
+
+**Step 2 — what we changed:**
+
+1. **1 Redis round trip per view** instead of 3 (a Lua script, see "One Redis round trip").
+2. **4 processes per server** (`WORKERS`, `SO_REUSEPORT` for gRPC, `uvicorn --workers` for REST).
+3. **Batching:** the API Gateway sends views in batches of 100 (`RecordViews`). 20K views/s =
+   **200 calls/s** instead of 20,000. Likes stay one by one (a user action that needs an answer).
+
+**Step 3 — the result (60 s at a fixed rate, 4 processes):**
+
+| Protocol | target inc/s | achieved inc/s | failed | batch p50 / p99 ms | like p99 ms | consistency lag p50 / p99 ms |
+|---|---:|---:|---:|---:|---:|---:|
+| gRPC | 20,000 | **20,001** | 0 | 2.2 / **12.9** | 11.7 | 2 / **15** |
+| REST | 20,000 | 20,001 | 0 | 2.5 / 12.3 | 10.7 | 3 / 18 |
+| gRPC | 40,000 | 39,780 | 0 | 4.5 / 105.0 | 80.1 | 6 / 137 |
+| REST | 40,000 | 39,734 | 1 | 9.6 / 196.2 | 153.5 | 14 / 249 |
+
+- **20K: both protocols keep up** with p99 ≈ 13 ms, far inside the SLO (p99 < 100 ms).
+- **Consistency lag** = time from sending a view until a read returns it: p99 **15 ms** vs the
+  requirement **≤ 2 s**. Reads come from Redis, which is updated at once.
+- **40K (2x headroom):** gRPC degrades less than REST (p99 105 vs 196 ms).
+- **Payload of a batch of 100 views:** JSON 4,182 B vs Protobuf **1,293 B (3.2x smaller)**.
+
+**One call per view (no batching)** — the ceiling of the protocols, table 2 in
+[benchmark/load_results.md](benchmark/load_results.md): about **1,000–2,000 RPS per process**, and
+at most **~5,000–9,000 RPS with 4 processes**, depending on the run. These numbers move a lot
+between runs on one laptop (k6, both servers, Redis and Postgres share 8 cores), so use them
+only for the conclusion: **without batching, 20K is out of reach on this machine; with batching
+it takes ~25% of the gRPC server's CPU.**
+
+**So the most important decision for 20K was batching, then the protocol.** gRPC still wins on
+size (3.2x) and on the tail under heavy load.
+
+## AI use
+
+Claude (Anthropic) was used as a working tool: to write and refactor code, tests, load-test
+scripts and Docker config, to run the benchmarks, and to draft the docs. The design decisions
+(gRPC, batching, Lua scripts, the cold key rule) and every number were checked and explained
+by the author; all numbers come from measurements in `benchmark/`.
+
