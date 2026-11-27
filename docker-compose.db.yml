@@ -6,8 +6,9 @@
 # The APIs then talk to PgBouncer, not to Postgres directly. GetCounters reads the replica.
 
 x-app-db: &app-db
-  DB_BEHIND_PGBOUNCER: "true"
-  DATABASE_URL: postgresql://postgres:postgres@pgbouncer:6432/counters
+  # APP_DATABASE_URL / DB_BEHIND_PGBOUNCER can be overridden to connect directly (db/run_pool.sh).
+  DB_BEHIND_PGBOUNCER: ${DB_BEHIND_PGBOUNCER:-true}
+  DATABASE_URL: ${APP_DATABASE_URL:-postgresql://postgres:postgres@pgbouncer:6432/counters}
   # Set DATABASE_READ_URL= (empty) to read from the primary: the "without replica" run.
   DATABASE_READ_URL: ${DATABASE_READ_URL-postgresql://postgres:postgres@pgbouncer:6432/counters_ro}
 

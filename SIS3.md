@@ -9,13 +9,14 @@ before/after benchmark with p95/p99 and an explanation of every gain.
 | Change | Result | Kept? |
 |---|---|:---:|
 | Sync worker: 1 statement with `unnest` instead of `executemany` (1000 statements) | p99 of a 1000-row batch **44 → 23 ms (1.9x)**, rows/s **+45%** | yes |
+| Pool size 2 / 5 / 10 / 25 / 50 per process | pool 2: 5–7% failed; 25: best p99. Direct: Postgres connections grow to **94** (near the limit). PgBouncer: capped at **30**, same latency | 25 + PgBouncer |
 | PgBouncer (transaction pooling) | 8 processes per API: `too many clients` errors **15 → 0**; Postgres connections capped at 40 (but no extra capacity, see 5.3) | yes |
 | asyncpg `reset` off behind PgBouncer | failed calls **88% → 0.05%** (a bug we found under load, see 5.2) | yes |
 | Read replica for GetCounters | p99 of reads with 8 processes **173 → 50 ms**; replication lag p50 1 ms, max 0.6 s (< 2 s) | yes |
 | `likes` partitioned by HASH(user_id) x16 | every query reads **1 of 16** partitions; latency about the same | yes |
 | Remove old data: DROP PARTITION vs DELETE | **9 ms vs 1,131 ms (130x)**, WAL **0.06 MB vs 21.8 MB** | (pattern) |
 | Watermark (`updated_at` index) vs flag (`dirty_posts`) | without an index the watermark scan takes **2.3 s**; with it, HOT updates **100% → 0%** and WAL **+45%** | flag |
-| Extra index `likes(post_id)` | like INSERT p99 **2.1 → 3.5 ms (+63%)**, throughput **−9%**; no T7 query uses it | no |
+| Extra index `likes(post_id)` | "who liked post X" **488 → 1.3 ms p50 (~370x)**; but every like INSERT p99 **+63%**, throughput **−9%**, +304 MB; no T7 query needs it | no |
 | Bigger `shared_buffers`, SSD planner settings | no measurable gain: the tables (5.8 GB) do not fit in RAM anyway | yes (harmless) |
 
 ---
@@ -53,11 +54,27 @@ Every query is answered by a **primary key**:
 The full plans: [benchmark/db/explain_before.txt](benchmark/db/explain_before.txt),
 [benchmark/db/explain_after.txt](benchmark/db/explain_after.txt).
 
-**The cost of an index** ([experiment E1](#e1-the-cost-of-an-extra-index)): an index
+**The cost of an index** ([benchmark/db_experiments.py](benchmark/db_experiments.py), E1): an index
 `likes(post_id)` ("who liked this post") makes every like more expensive: INSERT p99
 **2.1 → 3.5 ms (+63%)**, throughput **16,361 → 14,906/s (−9%)**, because each INSERT now updates
 two B-trees instead of one (and the second one is in random `post_id` order).
 T7 never asks "who liked post X", so we do not add it.
+
+**What the same index would buy** ([benchmark/db_index.py](benchmark/db_index.py)): the query
+`SELECT user_id FROM likes WHERE post_id = $1 LIMIT 20` ("who liked post X"):
+
+| | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| without an index on `post_id` | 488 ms | 667 ms | 713 ms |
+| with `likes(post_id)` (304 MB, built in 10 s) | **1.3 ms** | 10.7 ms | 17.8 ms |
+
+Without it, EXPLAIN ([benchmark/db/explain_index.txt](benchmark/db/explain_index.txt)) shows an
+`Index Only Scan` over the **whole** primary key `(user_id, post_id)` of all 16 partitions:
+`Buffers: read=78786` (~615 MB) per query. The key contains `post_id`, but as the **second** column,
+so it cannot be used to jump to one post (the leftmost-prefix rule, Lecture 6, slide 7).
+
+So the decision is a trade: ~370x faster for a read T7 does not have, against +63% p99 on a write
+T7 does ~1,000 times per second. If a "likers" list is added later, add this index then.
 
 **The slowest query: Q3 with 100 posts** (GetCounters after a Redis restart):
 p50 74 ms, p99 159 ms. EXPLAIN: `Index Scan ... Buffers: shared hit=230 read=273` — 100 random
@@ -104,7 +121,7 @@ After = migration 0002 + tuned config + a running replica.
 
 ## 4. Partitioning
 
-### 4.1 Which partitioning? ([experiment E2](#e2-partitioning-layouts))
+### 4.1 Which partitioning? ([benchmark/db_experiments.py](benchmark/db_experiments.py), E2)
 
 Same 5M-row copy of `likes`, our query Q4 (`liked_by_me`), 4 layouts:
 
@@ -202,6 +219,46 @@ requests fail at once with `too many clients` and the rest get through a bit fas
 database is too slow, the queue just moves from Postgres into PgBouncer. Its value shows at a load
 the database can serve (section 5.2: 0.05% failed with 16 processes) and when you add more app
 processes / pods than Postgres can have connections.
+
+### 5.4 Pool size: 2 / 5 / 10 / 25 / 50 per process ([db/run_pool.sh](db/run_pool.sh))
+
+The same moderate load (300 likes/s + 300 reads/s, every read a cold key, 60 s), 4 processes per
+API = 8 asyncpg pools, reads from the primary. Only the pool size and the connection path change.
+"Postgres conns" = the most client backends seen in `pg_stat_activity` (sampled every second).
+
+| Path | pool / process | Postgres conns | failed | like p95 | like p99 | read p95 | read p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| direct | 2 | 18 | 4.63% | 176 | 435 | 195 | 440 |
+| direct | 5 | 30 | 0.00% | 53 | 151 | 82 | 195 |
+| direct | 10 | 50 | 1.92% | 126 | 400 | 172 | 394 |
+| direct | **25** | **94** | 0.12% | 19 | 108 | 47 | 176 |
+| direct | 50 | 89 (limit) | 0.33% | 74 | 190 | 133 | 255 |
+| PgBouncer | 2 | 9 | 6.87% | 268 | 474 | 278 | 480 |
+| PgBouncer | 5 | 21 | 0.57% | 98 | 254 | 157 | 364 |
+| PgBouncer | 10 | 30 | 0.39% | 61 | 255 | 89 | 277 |
+| PgBouncer | **25** | **30** | 0.08% | 16 | 111 | 44 | 167 |
+| PgBouncer | 50 | 30 | 14.31% | 385 | 515 | 417 | 513 |
+| PgBouncer | 50, repeated | 30 | 0.30% | 43 | 196 | 90 | 249 |
+
+(ms) What holds across runs:
+
+1. **Too small is bad:** pool 2 → 5–7% failed, p99 ~450 ms in both paths. Requests wait in the
+   app for a free connection and hit the 200 ms query timeout.
+2. **Direct: Postgres connections grow with the pool** — 18, 30, 50, 94 — and then stop at the
+   `max_connections = 100` wall (pool 50: 89; the pools cannot grow further). One more API process
+   or a bigger pool and new connections are refused.
+3. **PgBouncer: Postgres connections stay at 30** (`default_pool_size`) whatever the app pool is.
+4. **Same speed, a third of the connections:** at pool 25, direct p99 108 / 176 ms with **94**
+   connections; PgBouncer 111 / 167 ms with **30**. That is the whole point of a pooler:
+   the app may open many connections, the database serves a few busy ones.
+5. **Little's Law agrees:** 600 queries/s x ~10 ms ≈ 6 busy connections on average; 30 leaves room
+   for bursts. Hundreds would only add contention (Lecture 7, slide 20: "smaller is usually faster").
+
+**Noise:** the curve is not smooth (direct pool 10 is worse than pool 5) and one run (PgBouncer, 50)
+had 14% failed calls but 0.3% when repeated. On one laptop, a single run can be disturbed; we trust
+the trends that repeat (points 1–4), not one number. Under a 2x higher load (500 + 500/s) every pool
+size was overloaded (13–25% failed, [benchmark/db/pool_overload/](benchmark/db/pool_overload/)),
+so pool size cannot fix a database that is simply too busy.
 
 ## 6. Read replica
 
@@ -315,6 +372,8 @@ small anyway: 600 queries/s x ~10 ms = **~6 busy connections**.
 sh db/run_sis3.sh          # ~1 h: seed 50M rows, BEFORE, migrate, AFTER (overload run), experiments
 sh db/run_mix.sh           # ~20 min: before / after end-to-end at a moderate load (section 8)
 sh db/demo_pgbouncer.sh    # ~4 min: direct vs PgBouncer under high load (section 5.3)
+sh db/run_pool.sh          # ~15 min: pool size 2/5/10/25/50, direct vs PgBouncer (section 5.4)
+python -m benchmark.db_index   # ~3 min: what an index on likes(post_id) buys on reads (section 2)
 python -m benchmark.db_bench --report      # -> benchmark/db_results.md
 ```
 

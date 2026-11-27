@@ -3,6 +3,9 @@ x-app-env: &app-env
   REDIS_URL: redis://redis:6379/0
   # Each server process writes its metrics here; /metrics adds them up.
   PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+  # Postgres pool size PER PROCESS (asyncpg). Changed by db/run_pool.sh.
+  DB_POOL_MIN: ${DB_POOL_MIN:-2}
+  DB_POOL_MAX: ${DB_POOL_MAX:-10}
 
 # Same number of processes for REST and gRPC, so the benchmark stays fair.
 # 4 processes x 10 Postgres connections x 2 servers + worker = 82 < max_connections 100.

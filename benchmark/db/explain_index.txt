@@ -1,0 +1,169 @@
+=== WITHOUT an index on likes(post_id)
+Limit (actual time=432.924..432.929 rows=0 loops=1)
+  Buffers: shared read=78786
+  I/O Timings: shared read=279.684
+  ->  Append (actual time=432.923..432.928 rows=0 loops=1)
+        Buffers: shared read=78786
+        I/O Timings: shared read=279.684
+        ->  Index Only Scan using likes_p00_pkey on likes_p00 likes_1 (actual time=26.644..26.645 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4926
+              I/O Timings: shared read=17.354
+        ->  Index Only Scan using likes_p01_pkey on likes_p01 likes_2 (actual time=25.749..25.749 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4929
+              I/O Timings: shared read=16.615
+        ->  Index Only Scan using likes_p02_pkey on likes_p02 likes_3 (actual time=27.824..27.824 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4930
+              I/O Timings: shared read=18.380
+        ->  Index Only Scan using likes_p03_pkey on likes_p03 likes_4 (actual time=25.971..25.971 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4927
+              I/O Timings: shared read=16.901
+        ->  Index Only Scan using likes_p04_pkey on likes_p04 likes_5 (actual time=25.915..25.915 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4930
+              I/O Timings: shared read=16.551
+        ->  Index Only Scan using likes_p05_pkey on likes_p05 likes_6 (actual time=29.679..29.679 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4918
+              I/O Timings: shared read=19.393
+        ->  Index Only Scan using likes_p06_pkey on likes_p06 likes_7 (actual time=25.955..25.955 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4920
+              I/O Timings: shared read=16.134
+        ->  Index Only Scan using likes_p07_pkey on likes_p07 likes_8 (actual time=23.608..23.608 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4930
+              I/O Timings: shared read=14.585
+        ->  Index Only Scan using likes_p08_pkey on likes_p08 likes_9 (actual time=33.284..33.284 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4912
+              I/O Timings: shared read=23.162
+        ->  Index Only Scan using likes_p09_pkey on likes_p09 likes_10 (actual time=30.994..30.994 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4920
+              I/O Timings: shared read=20.874
+        ->  Index Only Scan using likes_p10_pkey on likes_p10 likes_11 (actual time=25.807..25.807 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4916
+              I/O Timings: shared read=16.457
+        ->  Index Only Scan using likes_p11_pkey on likes_p11 likes_12 (actual time=26.617..26.617 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4928
+              I/O Timings: shared read=17.144
+        ->  Index Only Scan using likes_p12_pkey on likes_p12 likes_13 (actual time=20.207..20.207 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4928
+              I/O Timings: shared read=11.378
+        ->  Index Only Scan using likes_p13_pkey on likes_p13 likes_14 (actual time=26.749..26.749 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4923
+              I/O Timings: shared read=17.284
+        ->  Index Only Scan using likes_p14_pkey on likes_p14 likes_15 (actual time=27.158..27.159 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4923
+              I/O Timings: shared read=17.178
+        ->  Index Only Scan using likes_p15_pkey on likes_p15 likes_16 (actual time=30.738..30.738 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Heap Fetches: 0
+              Buffers: shared read=4926
+              I/O Timings: shared read=20.295
+Planning:
+  Buffers: shared read=5
+  I/O Timings: shared read=0.449
+Planning Time: 0.728 ms
+Execution Time: 433.605 ms
+
+=== WITH likes(post_id)
+Limit (actual time=5.110..5.114 rows=0 loops=1)
+  Buffers: shared hit=3 read=48
+  I/O Timings: shared read=4.933
+  ->  Append (actual time=5.109..5.112 rows=0 loops=1)
+        Buffers: shared hit=3 read=48
+        I/O Timings: shared read=4.933
+        ->  Index Scan using likes_p00_post_id_idx on likes_p00 likes_1 (actual time=0.360..0.360 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared hit=3 read=3
+              I/O Timings: shared read=0.329
+        ->  Index Scan using likes_p01_post_id_idx on likes_p01 likes_2 (actual time=0.315..0.315 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.304
+        ->  Index Scan using likes_p02_post_id_idx on likes_p02 likes_3 (actual time=0.324..0.324 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.315
+        ->  Index Scan using likes_p03_post_id_idx on likes_p03 likes_4 (actual time=0.316..0.316 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.307
+        ->  Index Scan using likes_p04_post_id_idx on likes_p04 likes_5 (actual time=0.317..0.317 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.308
+        ->  Index Scan using likes_p05_post_id_idx on likes_p05 likes_6 (actual time=0.334..0.334 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.324
+        ->  Index Scan using likes_p06_post_id_idx on likes_p06 likes_7 (actual time=0.317..0.317 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.306
+        ->  Index Scan using likes_p07_post_id_idx on likes_p07 likes_8 (actual time=0.324..0.324 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.315
+        ->  Index Scan using likes_p08_post_id_idx on likes_p08 likes_9 (actual time=0.306..0.306 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.297
+        ->  Index Scan using likes_p09_post_id_idx on likes_p09 likes_10 (actual time=0.322..0.322 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.313
+        ->  Index Scan using likes_p10_post_id_idx on likes_p10 likes_11 (actual time=0.311..0.312 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.303
+        ->  Index Scan using likes_p11_post_id_idx on likes_p11 likes_12 (actual time=0.294..0.294 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.285
+        ->  Index Scan using likes_p12_post_id_idx on likes_p12 likes_13 (actual time=0.325..0.325 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.313
+        ->  Index Scan using likes_p13_post_id_idx on likes_p13 likes_14 (actual time=0.319..0.319 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.309
+        ->  Index Scan using likes_p14_post_id_idx on likes_p14 likes_15 (actual time=0.301..0.301 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.293
+        ->  Index Scan using likes_p15_post_id_idx on likes_p15 likes_16 (actual time=0.321..0.321 rows=0 loops=1)
+              Index Cond: (post_id = 4242)
+              Buffers: shared read=3
+              I/O Timings: shared read=0.313
+Planning:
+  Buffers: shared hit=134 read=16
+  I/O Timings: shared read=3.566
+Planning Time: 4.768 ms
+Execution Time: 5.632 ms

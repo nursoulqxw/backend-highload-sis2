@@ -1,0 +1,12 @@
+direct    pool  2: failed 1642/35497, backends max 18, like p95/p99 176.3/435.4, read p95/p99 194.6/440.0 ms
+direct    pool  5: failed 0/35777, backends max 30, like p95/p99 53.0/150.5, read p95/p99 82.2/195.1 ms
+direct    pool 10: failed 682/35455, backends max 50, like p95/p99 125.6/400.3, read p95/p99 172.4/393.8 ms
+direct    pool 25: failed 44/35733, backends max 94, like p95/p99 19.3/108.4, read p95/p99 47.4/175.7 ms
+direct    pool 50: failed 119/35640, backends max 89, like p95/p99 74.4/189.7, read p95/p99 132.8/254.9 ms
+pgbouncer pool  2: failed 2418/35171, backends max 9, like p95/p99 268.4/474.3, read p95/p99 278.0/479.9 ms
+pgbouncer pool  5: failed 203/35489, backends max 21, like p95/p99 97.6/253.9, read p95/p99 156.6/363.7 ms
+pgbouncer pool 10: failed 140/35527, backends max 30, like p95/p99 61.0/255.5, read p95/p99 89.3/277.1 ms
+pgbouncer pool 25: failed 30/35785, backends max 30, like p95/p99 15.8/111.5, read p95/p99 44.2/166.7 ms
+pgbouncer pool 50: failed 4976/34782, backends max 30, like p95/p99 385.4/515.0, read p95/p99 417.3/513.4 ms
+=== pool sweep done
+=== ALL DONE
