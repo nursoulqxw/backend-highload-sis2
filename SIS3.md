@@ -265,6 +265,50 @@ has the worst tail. The real, measured gains of SIS #3 are: the `unnest` batch (
 replica for the read tail (3–4x vs the same setup without it), and PgBouncer under high
 concurrency (section 5).
 
+## 8b. The six questions for a scaled database (Lecture 7, slide 22)
+
+**1. Which wall are we at?** *Connections* first: 8 processes x 2 APIs x 10 = 160 > `max_connections`
+100 (section 5). Then *reads* of cold keys (Q3 x100 is the slowest query, section 2). Not *writes*:
+views never reach Postgres, likes are ~1,000/s, and the sync worker writes in batches.
+
+**2. RPO and RTO** (how much data we may lose / how long writes stop):
+
+| Data | Where | RPO | Why |
+|---|---|---|---|
+| likes | Postgres primary, `synchronous_commit = on` | **0** on a primary crash | COMMIT waits for the WAL on disk |
+| likes, if the primary's disk is lost | async replica | the replication lag, **≤ 0.6 s** measured | async replication |
+| `post_counters` (copy) | Postgres, `synchronous_commit = off` in the sync worker | ~0.6 s of the copy | Redis still has the values; the next sync rewrites them |
+| live counters | Redis, AOF `everysec` | **≤ 1 s** of increments | fsync once per second |
+
+RTO: there is **no automatic failover** here (no Patroni / etcd). Promoting the replica is manual
+(`pg_ctl promote`, then point PgBouncer's `counters` to it), so minutes, not seconds. With Patroni
+it would be tens of seconds (Lecture 7, slide 11). Reads keep working from Redis during that time.
+
+**3. Which reads tolerate lag?** Listed explicitly:
+
+| Read | Goes to | Why |
+|---|---|---|
+| GetCounters: cold-key load of `post_counters` + `liked_by_me` | **replica** | eventual consistency ≤ 2 s is the requirement; lag p99 355 ms |
+| cold-key load **before an increment** (`+1` on a post missing in Redis) | **primary** | a stale base value + 1 would be written into Redis and later synced back |
+| everything that writes (like, unlike, sync worker) | **primary** | a replica is read-only |
+
+Read-your-writes: right after a like, `liked_by_me` from the replica may be `false` for up to the lag.
+Allowed by the 2 s requirement; the cheap fix, if needed, is "read from the primary for a few seconds
+after this user writes" (Lecture 7, slide 9).
+
+**4. Is lag monitored and acted on?** *Monitored*: sampled once per second under load (section 6),
+and visible any time in `pg_stat_replication.replay_lag`. *Acted on*: **not yet** — the app does not
+switch reads back to the primary when the lag grows. Next step: a background check of
+`now() - pg_last_xact_replay_timestamp()` on the replica; above 1 s, route GetCounters to the primary.
+
+**5. Does the partition key prune?** Yes. Every query on `likes` has `user_id = $1`; EXPLAIN after the
+migration shows `Index Only Scan using likes_p12_pkey on likes_p12` — 1 of 16 partitions.
+
+**6. Do pods × pool fit?** Without PgBouncer: no (160 > 100, and we saw `too many clients`). With it:
+the apps may open up to 2,000 client connections, PgBouncer keeps at most **40** server connections
+per database (`max_db_connections`), so primary 40 + sync/admin < 100. By Little's Law the need is
+small anyway: 600 queries/s x ~10 ms = **~6 busy connections**.
+
 ## 9. How to reproduce
 
 ```bash
