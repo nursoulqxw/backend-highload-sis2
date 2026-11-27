@@ -20,6 +20,10 @@ def get_pool(request: Request) -> asyncpg.Pool:
     return request.app.state.pool
 
 
+def get_read_pool(request: Request) -> asyncpg.Pool:
+    return request.app.state.read_pool
+
+
 def get_redis(request: Request) -> Redis:
     return request.app.state.redis
 
@@ -40,6 +44,7 @@ def parse_post_ids(post_ids: Annotated[str, Query(examples=["1,2,3"])]) -> list[
 
 # Reusable parameter types. FastAPI fills them in for every request.
 PoolDep = Annotated[asyncpg.Pool, Depends(get_pool)]
+ReadPoolDep = Annotated[asyncpg.Pool, Depends(get_read_pool)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 FaultsDep = Annotated[FaultInjector, Depends(get_faults)]
 PostId = Annotated[int, Path(gt=0)]
@@ -89,8 +94,12 @@ async def views_batch(body: RecordViewsIn, pool: PoolDep, redis: RedisDep, fault
 
 @router.get("/counters", response_model=list[PostCounterOut])
 async def counters(
-    post_ids: PostIds, pool: PoolDep, redis: RedisDep, faults: FaultsDep, user_id: OptionalUserId = None
+    post_ids: PostIds,
+    read_pool: ReadPoolDep,
+    redis: RedisDep,
+    faults: FaultsDep,
+    user_id: OptionalUserId = None,
 ):
     with track_request("rest", "GetCounters"):
         async with faults.around_call():
-            return await get_counters(pool, redis, user_id, post_ids)
+            return await get_counters(read_pool, redis, user_id, post_ids)

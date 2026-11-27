@@ -1,0 +1,35 @@
+{
+  "protocol": "grpc",
+  "mode": "unary",
+  "batch": 1,
+  "target_increments_per_s": 3000,
+  "achieved_increments_per_s": 2898.3,
+  "calls_per_s": 3000,
+  "duration": "30s",
+  "like_pct": 5,
+  "failed_calls": 0,
+  "dropped_calls": 3052,
+  "view_call_ms": {
+    "p50": 0.9002915,
+    "p95": 115.86373145,
+    "p99": 132.28015049999996,
+    "max": 172.454916,
+    "avg": 30.681277539916238
+  },
+  "like_call_ms": {
+    "p50": 0.779542,
+    "p95": 1.913417,
+    "p99": 4.572959,
+    "max": 27.598375,
+    "avg": 1.1215456927349468
+  },
+  "consistency_lag_ms": {
+    "p50": 3,
+    "p95": 118,
+    "p99": 134,
+    "max": 170,
+    "avg": 35.31229235880399
+  },
+  "max_vus": 340,
+  "workers": 1
+}

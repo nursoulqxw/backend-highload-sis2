@@ -24,6 +24,10 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Persistence: AOF, fsync once per second -> after a crash we lose at most ~1 s of counts.
+    # RDB snapshots are off: with millions of keys, a snapshot (fork + copy) every ~40 s under
+    # load gave latency spikes.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", ""]
     ports: ["6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -33,10 +37,12 @@ services:
   rest-api:
     build: .
     # Runs the migrations first, then starts Uvicorn with N processes (the same N as grpc-api).
-    command: ["sh", "-c", "rm -rf /tmp/prom && mkdir -p /tmp/prom && alembic upgrade head && exec uvicorn app.rest.main:app --host 0.0.0.0 --port 8000 --no-access-log --workers $$WORKERS"]
+    # ALEMBIC_TARGET=0001 keeps the old schema (SIS #3 "before"); default: the newest.
+    command: ["sh", "-c", "rm -rf /tmp/prom && mkdir -p /tmp/prom && alembic upgrade $${ALEMBIC_TARGET:-head} && exec uvicorn app.rest.main:app --host 0.0.0.0 --port 8000 --no-access-log --workers $$WORKERS"]
     environment:
       <<: *app-env
       WORKERS: *workers
+      ALEMBIC_TARGET: ${ALEMBIC_TARGET:-head}
     ports: ["8000:8000"]
     depends_on:
       postgres: { condition: service_healthy }

@@ -5,6 +5,9 @@ class Settings(BaseSettings):
     """All settings come from env vars (for example DATABASE_URL)."""
 
     database_url: str = "postgresql://postgres:postgres@localhost:5432/counters"
+    # Optional read replica. GetCounters reads from it; all writes go to database_url.
+    # Empty = read from database_url too.
+    database_read_url: str = ""
     redis_url: str = "redis://localhost:6379/0"
     db_pool_min: int = 2
     db_pool_max: int = 10  # per process! N processes x 10 must stay below Postgres max_connections

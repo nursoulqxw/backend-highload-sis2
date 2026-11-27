@@ -1,0 +1,96 @@
+Pager usage is off.
+=== Q1 like: INSERT ... ON CONFLICT DO NOTHING (rolled back, so the data does not change)
+BEGIN
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Insert on likes (actual time=1.802..1.802 rows=0 loops=1)
+   Conflict Resolution: NOTHING
+   Tuples Inserted: 1
+   Conflicting Tuples: 0
+   Buffers: shared hit=47 read=7 dirtied=3
+   ->  Result (actual time=0.001..0.002 rows=1 loops=1)
+ Planning:
+   Buffers: shared hit=4 read=2
+ Planning Time: 0.226 ms
+ Execution Time: 1.845 ms
+(10 rows)
+
+ROLLBACK
+=== Q2 unlike: DELETE by primary key (rolled back)
+BEGIN
+                                                 QUERY PLAN                                                 
+------------------------------------------------------------------------------------------------------------
+ Delete on likes (actual time=0.759..0.760 rows=0 loops=1)
+   Buffers: shared hit=10 read=3 dirtied=2
+   InitPlan 1 (returns $0)
+     ->  Limit (actual time=0.520..0.520 rows=1 loops=1)
+           Buffers: shared hit=5 read=2
+           ->  Index Only Scan using likes_pkey1 on likes likes_1 (actual time=0.519..0.519 rows=1 loops=1)
+                 Index Cond: (user_id = 12345)
+                 Heap Fetches: 0
+                 Buffers: shared hit=5 read=2
+   ->  Index Scan using likes_pkey1 on likes (actual time=0.721..0.721 rows=1 loops=1)
+         Index Cond: ((user_id = 12345) AND (post_id = $0))
+         Buffers: shared hit=8 read=3
+ Planning:
+   Buffers: shared hit=35 read=6
+ Planning Time: 1.206 ms
+ Execution Time: 1.584 ms
+(16 rows)
+
+ROLLBACK
+=== Q3 cold read x1: one post
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Index Scan using post_counters_pkey on post_counters (actual time=0.426..0.427 rows=1 loops=1)
+   Index Cond: (post_id = ANY ('{31415926}'::bigint[]))
+   Buffers: shared hit=1 read=4
+ Planning:
+   Buffers: shared hit=63 read=1
+ Planning Time: 0.633 ms
+ Execution Time: 0.440 ms
+(7 rows)
+
+=== Q3 cold read x100: 100 random posts of 50M
+                                            QUERY PLAN                                             
+---------------------------------------------------------------------------------------------------
+ Index Scan using post_counters_pkey on post_counters (actual time=0.536..49.955 rows=100 loops=1)
+   Index Cond: (post_id = ANY ($0))
+   Buffers: shared hit=230 read=273 dirtied=2
+   InitPlan 1 (returns $0)
+     ->  Function Scan on generate_series g (actual time=0.022..0.027 rows=100 loops=1)
+ Planning Time: 0.065 ms
+ Execution Time: 50.029 ms
+(7 rows)
+
+=== Q4 liked_by_me: one user, 20 posts
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Index Only Scan using likes_pkey1 on likes (actual time=0.051..0.052 rows=0 loops=1)
+   Index Cond: (user_id = 12345)
+   Filter: (post_id = ANY (($0)::bigint[]))
+   Rows Removed by Filter: 2
+   Heap Fetches: 2
+   Buffers: shared hit=5
+   InitPlan 1 (returns $0)
+     ->  Function Scan on generate_series g (actual time=0.011..0.013 rows=20 loops=1)
+ Planning Time: 0.069 ms
+ Execution Time: 0.070 ms
+(10 rows)
+
+=== Q5 sync worker: upsert 1000 counters with unnest (rolled back)
+BEGIN
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Insert on post_counters (actual time=34.003..34.003 rows=0 loops=1)
+   Conflict Resolution: UPDATE
+   Conflict Arbiter Indexes: post_counters_pkey
+   Tuples Inserted: 0
+   Conflicting Tuples: 1000
+   Buffers: shared hit=13168 read=143 dirtied=154 written=11
+   ->  Function Scan on generate_series p (actual time=0.037..0.191 rows=1000 loops=1)
+ Planning Time: 0.020 ms
+ Execution Time: 34.068 ms
+(9 rows)
+
+ROLLBACK

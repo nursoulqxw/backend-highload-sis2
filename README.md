@@ -6,12 +6,18 @@ Course: Backend for Highloaded Environment.
 with idempotency, timeouts and retries, and measure latency and payload size against a
 REST/JSON baseline.
 
-**Short answer:** for like, view and reads of up to 10 posts, gRPC was **2–2.8x faster at p50**,
-**8–13x faster at p99** and had **2.9–3.8x more throughput**. Requests were **2.2–3.7x smaller**
-and GetCounters responses **5.7–5.8x smaller**. One exception: in GetCounters with 100 posts the
-server work takes most of the time, so p50 was almost the same (1.1x). The response was still 5.7x
-smaller.
-Details are in [benchmark/results.md](benchmark/results.md).
+**The load from SIS #1:** ~20,000 increments/s (likes + views), 50M posts, eventual consistency ≤ 2 s.
+
+**Short answer:**
+
+- **20K increments/s: done.** 20,001 increments/s for 60 s, 0 errors, p99 13 ms, a new view is
+  visible in a read after 15 ms (p99). How: views are sent in **batches of 100** (`RecordViews`),
+  each view is **1 Redis round trip** (a Lua script), and each server runs **4 processes**.
+  Details: [benchmark/load_results.md](benchmark/load_results.md), [Part 4](#part-4-20k-incrementss).
+- **gRPC vs REST:** Protobuf is **3.2x smaller** for a batch of 100 views and 2.2–5.8x smaller for the
+  other calls. At 20K both protocols keep up; at 40K gRPC degrades less (p99 105 ms vs 196 ms).
+  For one call at a time, gRPC was 2–2.8x faster at p50 and 8–13x at p99
+  ([benchmark/results.md](benchmark/results.md)).
 
 ## System design (from SIS #1)
 
@@ -30,7 +36,7 @@ outside clients.
 4. [Monitoring: Prometheus + Grafana](#monitoring-prometheus--grafana)
 5. [Project structure](#project-structure)
 6. [How it works](#how-it-works) (like, unlike, view, get counters, sync worker)
-7. [The three parts of the task](#the-three-parts-of-the-task) (protocol, idempotency + timeouts + retries, measurements)
+7. [The parts of the task](#the-parts-of-the-task) (protocol, idempotency + timeouts + retries, measurements, 20K increments/s)
 
 ---
 
@@ -48,8 +54,8 @@ This starts 7 containers:
 |---|---|---|
 | `postgres` | Database. Stores likes and a saved copy of the counters. | 5432 |
 | `redis` | Live counters in memory. Very fast. | 6379 |
-| `rest-api` | REST/JSON API (FastAPI + Uvicorn). Runs the migration first. | 8000 |
-| `grpc-api` | gRPC API (grpcio). Uses the **same** code as `rest-api`. | 50051 |
+| `rest-api` | REST/JSON API (FastAPI + Uvicorn, 4 processes). Runs the migration first. | 8000 |
+| `grpc-api` | gRPC API (grpcio, 4 processes). Uses the **same** code as `rest-api`. | 50051 |
 | `sync-worker` | Every 5 s copies counters from Redis to Postgres. | – |
 | `prometheus` | Every 5 s reads the metrics of both API servers. | 9090 |
 | `grafana` | Shows the metrics as a dashboard. | 3000 |
@@ -60,7 +66,14 @@ Try the REST API:
 curl -X PUT  -H "X-User-Id: 1" http://localhost:8000/api/v1/posts/42/like
 curl -X POST -H "X-User-Id: 1" http://localhost:8000/api/v1/posts/42/view
 curl -H "X-User-Id: 1" "http://localhost:8000/api/v1/counters?post_ids=42,43"
+curl -X POST -H "Content-Type: application/json" http://localhost:8000/api/v1/views:batch \
+     -d '{"views": [{"user_id": 2, "post_id": 42}, {"user_id": 3, "post_id": 42}]}'
 ```
+
+**Number of server processes:** `WORKERS=1 docker compose up -d` (default 4). Python runs one
+thread of code at a time (the GIL), so one process uses at most one CPU core. More processes =
+more cores. REST: `uvicorn --workers N`. gRPC: N processes listen on the same port
+(`SO_REUSEPORT`), the Linux kernel gives each new connection to one of them.
 
 API docs in the browser: http://localhost:8000/docs
 
@@ -90,7 +103,7 @@ The tests start real Postgres and Redis in Docker (testcontainers). Docker must 
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pytest -v          # 47 tests
+pytest -v          # 59 tests
 make lint          # code style: ruff check + ruff format --check
 ```
 
@@ -99,6 +112,7 @@ make lint          # code style: ruff check + ruff format --check
 | `tests/test_rest.py` | REST: like, unlike, view, get counters, cache miss, cold key, sync worker |
 | `tests/test_grpc.py` | gRPC: the same operations, and **REST and gRPC return the same data** |
 | `tests/test_reliability.py` | Idempotency, retries, timeouts — **each test runs twice: REST and gRPC** |
+| `tests/test_batch.py` | `RecordViews` (batch): counting, duplicates, retry after a lost answer, cold posts — **REST and gRPC** |
 | `tests/test_metrics.py` | Both protocols record the Prometheus metrics |
 
 ## How to run the benchmark
@@ -144,7 +158,9 @@ flowchart LR
 How it works, step by step:
 
 1. Each request goes through `track_request()` in `app/core/metrics.py`. It counts the request
-   and measures its time. REST and gRPC use the same function.
+   and measures its time. REST and gRPC use the same function. With several processes, each
+   one writes its numbers to files in `PROMETHEUS_MULTIPROC_DIR`, and the metrics page adds
+   them up (`render_metrics()`).
 2. Each server shows its numbers as a plain text page. REST: `/metrics`. gRPC is not plain HTTP,
    so it has a small separate HTTP server on port 9100.
 3. Prometheus reads (scrapes) both pages every 5 s and stores the history.
@@ -170,9 +186,9 @@ app/
   config.py                all settings, from env vars
   core/                    THE logic. Used by both REST and gRPC.
     resources.py           creates the Postgres pool and Redis client (with timeouts)
-    cache.py               Redis helpers: cold key, cache miss, increment
+    cache.py               Redis: Lua scripts (view, batch of views, +1/-1), cold key, cache miss
     likes.py               like_post, unlike_post
-    views.py               record_view
+    views.py               record_view, record_views (batch)
     counters.py            get_counters
     errors.py              "backend is slow or down" errors -> 503 / UNAVAILABLE
     faults.py              fault injection for tests (off by default)
@@ -182,10 +198,16 @@ app/
     generated/             code generated from the .proto file (do not edit)
   worker/                  Sync Worker
 clients/                   REST and gRPC clients with deadline + retries
-benchmark/                 benchmark script, results, charts
+benchmark/                 benchmarks, results, charts
+  run_benchmark.py         SIS #2: REST vs gRPC, one call at a time (payload, latency)
+  run_load.py              SIS #2: the 20K increments/s load test (runs k6) -> load_results.md
+  db_bench.py              SIS #3: the real SQL queries, before / after the tuning
+  db_experiments.py        SIS #3: index cost, partitioning, DELETE vs DROP, flag vs watermark
+loadtest/                  k6 scripts: increments.js (20K load), db_mix.js (DB-heavy mix)
+db/                        SIS #3: seed (50M posts), EXPLAIN script, Postgres config, PgBouncer, replica
 monitoring/                Prometheus and Grafana config, the dashboard
 tests/                     integration tests
-migrations/                Alembic (creates the tables)
+migrations/                Alembic: 0001 creates the tables, 0002 is the SIS #3 tuning
 ```
 
 **Why the folder is `grpc_api` and not `grpc`:** a folder named `grpc` would hide the
@@ -245,6 +267,10 @@ sequenceDiagram
 - **Redis `seen:{user_id}:{post_id}`**: `"1"` with TTL 1 hour. It dedupes views.
 - **Redis `dirty_posts`**: a set of posts that changed since the last sync.
 
+Redis persistence: AOF with `fsync` once per second (see `docker-compose.yml`). After a Redis crash
+we lose at most ~1 s of counts. RDB snapshots are off: with millions of keys, a snapshot every
+~40 s under load caused latency spikes.
+
 ### The "cold key" rule
 
 Sometimes `post:{id}` is not in Redis, for example after a Redis restart. If we just add +1,
@@ -254,8 +280,17 @@ the counter starts from 0, which is wrong. So before every +1 or −1:
 2. If not, read the counts from `post_counters` in Postgres.
 3. Put them into Redis with `HSETNX`. It writes a field only if it is empty, so it never
    overwrites a newer value.
+4. Do the +1.
 
-Code: `ensure_loaded()` in `app/core/cache.py`.
+### One Redis round trip: Lua scripts
+
+Steps "check if it exists" and "+1" (and for a view also the dedupe) run **inside Redis** as one
+Lua script ([app/core/cache.py](app/core/cache.py)). One network round trip instead of three, and
+Redis runs a script **atomically**: nothing can happen between its steps.
+
+The script returns a code: `1` = counted, `0` = duplicate, `-1` = cold key. On `-1` Python
+loads the post from Postgres (rule above) and calls the script again. This is rare: only the
+first touch of a post after a Redis restart, or a post nobody touched before.
 
 ### Flow 1: Like (`PUT /api/v1/posts/{id}/like`, gRPC `LikePost`)
 
@@ -264,8 +299,8 @@ Code: `like_post()` in `app/core/likes.py`.
 1. `INSERT INTO likes ... ON CONFLICT DO NOTHING`.
 2. Postgres says how many rows were inserted: `"INSERT 0 1"` or `"INSERT 0 0"`.
 3. 0 rows: the user already liked this post. Stop. Nothing changes.
-4. 1 row: apply the cold key rule.
-5. In one Redis pipeline: `HINCRBY post:{id} likes 1` and `SADD dirty_posts {id}`.
+4. 1 row: one Lua script in Redis: if `post:{id}` exists, `HINCRBY likes 1` + `SADD dirty_posts {id}`.
+5. The script says "cold": load the post from Postgres (cold key rule), run the script again.
 
 ```mermaid
 sequenceDiagram
@@ -278,12 +313,12 @@ sequenceDiagram
         Note over Core: stop, nothing changes (idempotent)
     else 1 row inserted (new like)
         PG-->>Core: INSERT 0 1
-        Core->>R: EXISTS post:42
-        opt key is missing (cold key)
+        Core->>R: Lua: EXISTS post:42 ? HINCRBY likes 1 + SADD dirty_posts 42
+        opt script answers -1 (cold key)
             Core->>PG: SELECT likes, views FROM post_counters
             Core->>R: HSETNX post:42 likes / views
+            Core->>R: Lua again: HINCRBY likes 1 + SADD dirty_posts 42
         end
-        Core->>R: pipeline: HINCRBY post:42 likes 1 + SADD dirty_posts 42
     end
 ```
 
@@ -293,33 +328,52 @@ Code: `unlike_post()` in `app/core/likes.py`.
 
 1. `DELETE FROM likes WHERE user_id = ... AND post_id = ...`.
 2. 0 rows deleted: the user did not like this post. Stop.
-3. 1 row deleted: cold key rule, then `HINCRBY likes -1` and `SADD dirty_posts`.
+3. 1 row deleted: the same Lua script with `-1` (and the cold key rule if needed).
 
 ### Flow 3: View (`POST /api/v1/posts/{id}/view`, gRPC `RecordView`)
 
-Code: `record_view()` in `app/core/views.py`.
+Code: `record_view()` in `app/core/views.py`, script `VIEW_SCRIPT` in `app/core/cache.py`.
+All steps are ONE Lua script in Redis:
 
-1. `SET seen:{user}:{post} 1 NX EX 3600`.
+1. `post:{id}` does not exist → return `-1` (cold). Python loads it from Postgres and runs the
+   script again. This check is **first**, before the dedupe key is set: if Postgres fails here,
+   the client's retry still counts the view.
+2. `SET seen:{user}:{post} 1 NX EX 3600`.
    `NX` = only if the key does not exist. `EX 3600` = delete it after 1 hour.
-2. Redis says nothing (None): this user saw this post in the last hour. Stop.
-3. Redis says OK: a new view. Cold key rule, then `HINCRBY views 1` and `SADD dirty_posts`.
+3. The key already existed: this user saw this post in the last hour. Return `0`, nothing changes.
+4. New key: `HINCRBY views 1` + `SADD dirty_posts`. Return `1`.
 
 ```mermaid
 sequenceDiagram
     participant Core as app/core record_view
-    participant R as Redis
-    Core->>R: SET seen:7:42 1 NX EX 3600
-    alt key already exists (seen in the last hour)
-        R-->>Core: None
-        Note over Core: stop, nothing changes (idempotent for 1 hour)
-    else key is new
-        R-->>Core: OK
-        Note over Core: cold key rule (load from Postgres if needed)
-        Core->>R: pipeline: HINCRBY post:42 views 1 + SADD dirty_posts 42
+    participant R as Redis (one Lua script)
+    Core->>R: EVALSHA view(seen:7:42, post:42)
+    alt post:42 missing (cold key)
+        R-->>Core: -1
+        Note over Core: load post 42 from Postgres (HSETNX), then the script again
+    else seen:7:42 already set (seen in the last hour)
+        R-->>Core: 0
+        Note over Core: nothing changes (idempotent for 1 hour)
+    else new view
+        Note over R: SET seen NX EX 3600 + HINCRBY views + SADD dirty_posts
+        R-->>Core: 1
     end
 ```
 
-Views never touch Postgres. That is why they are fast, and they are 95% of the traffic.
+Views do not touch Postgres (only a cold key does). That is why they are fast, and they are 95%
+of the traffic.
+
+### Flow 3b: Many views at once (`POST /api/v1/views:batch`, gRPC `RecordViews`)
+
+Code: `record_views()` in `app/core/views.py`, script `VIEW_BATCH_SCRIPT` in `app/core/cache.py`.
+
+The API Gateway collects views for ~50 ms and sends them in one call (1..1000 views).
+The script runs the steps of Flow 3 for every view in a loop and returns one code per view.
+Cold posts of the whole batch are loaded from Postgres with **one** SQL query, then only those
+views go through the script again. Returns `counted` = how many views were new.
+
+Idempotent: every view is deduped by its `seen:` key, so the whole batch may be retried.
+Test: `test_batch_retry_after_lost_response_does_not_count_twice`.
 
 ### Flow 4: Get counters (`GET /api/v1/counters?post_ids=1,2,3`, gRPC `GetCounters`)
 
@@ -355,10 +409,15 @@ Code: `app/worker/sync.py`. A separate container.
 1. Every 5 seconds it wakes up.
 2. `SPOP dirty_posts 1000`: takes up to 1000 changed post ids.
 3. `HMGET` their counts from Redis (one pipeline).
-4. Writes them all to Postgres in one batch (`executemany`):
-   `INSERT INTO post_counters ... ON CONFLICT (post_id) DO UPDATE SET likes = ..., views = ...`.
-5. Repeats steps 2–4 until `dirty_posts` is empty.
-6. On SIGTERM (`docker compose stop`) it does one last sync and stops cleanly.
+4. Writes them all to Postgres with **one** SQL statement: the ids, likes and views go as 3
+   arrays, `unnest()` turns them into rows:
+   `INSERT INTO post_counters SELECT ... FROM unnest($1, $2, $3) ON CONFLICT (post_id) DO UPDATE ...`.
+   Rows that did not change are skipped (`WHERE ... IS DISTINCT FROM ...`).
+   `SET LOCAL synchronous_commit = off`: `post_counters` is only a copy (Redis has the live
+   values), so we do not wait for the WAL flush to disk. Details and numbers: SIS #3.
+5. If the write fails, the ids go back into `dirty_posts`, so the next round retries them.
+6. Repeats steps 2–4 until `dirty_posts` is empty.
+7. On SIGTERM (`docker compose stop`) it does one last sync and stops cleanly.
 
 ```mermaid
 sequenceDiagram
@@ -370,7 +429,7 @@ sequenceDiagram
             W->>R: SPOP dirty_posts 1000
             R-->>W: up to 1000 post ids
             W->>R: pipeline: HMGET post:{id} likes views (for each id)
-            W->>PG: executemany: INSERT ... ON CONFLICT (post_id) DO UPDATE
+            W->>PG: one INSERT ... SELECT FROM unnest(...) ON CONFLICT DO UPDATE
         end
     end
 ```
@@ -379,7 +438,7 @@ Postgres is at most about 5 s behind Redis. Users do not see this, because they 
 
 ---
 
-## The three parts of the task
+## The parts of the task
 
 ### Part 1. The protocol: gRPC
 
@@ -409,6 +468,7 @@ browsers and mobile apps, REST/JSON stays, because everyone understands it.
 | Like (`PUT`, `LikePost`) | Primary key `(user_id, post_id)` + `ON CONFLICT DO NOTHING`. The second INSERT inserts 0 rows, so the counter does not change. |
 | Unlike (`DELETE`, `UnlikePost`) | The second DELETE deletes 0 rows, so the counter does not change. |
 | View (`POST`, `RecordView`) | `SET ... NX`: the second SET in the same hour does nothing, so the counter does not change. |
+| Many views (`POST /views:batch`, `RecordViews`) | The same `SET ... NX` for every view in the batch. A retried batch counts 0 new views. |
 | Get counters (`GET`, `GetCounters`) | It only reads. |
 
 The counter changes **only when the state really changes**. This is what makes retries safe.
@@ -469,7 +529,7 @@ The same rules for both protocols:
 | | gRPC | REST |
 |---|---|---|
 | Where | `SERVICE_CONFIG` in [clients/grpc_client.py](clients/grpc_client.py). The gRPC library does the retries. | `send()` in [clients/rest_client.py](clients/rest_client.py). Our own small loop. |
-| Which calls | Listed by name in `IDEMPOTENT_METHODS` | All 4 operations (all are idempotent) |
+| Which calls | Listed by name in `IDEMPOTENT_METHODS` | All 5 operations (all are idempotent) |
 
 **Why backoff:** if the server is overloaded, instant retries make it worse.
 **Why jitter (random):** if 1000 clients fail at the same moment, without jitter they all retry
@@ -498,7 +558,9 @@ Full results: [benchmark/results.md](benchmark/results.md). Charts:
 ![Payload size](benchmark/payload_size.png)
 
 **Setup:** for each operation, 500 warm-up requests, then 10,000 measured requests, 50 at the
-same time. Both servers run in 1 process each, with the same Postgres, Redis and `app/core` code.
+same time. Both servers run in 1 process each (`WORKERS=1 docker compose up -d`), with the same
+Postgres, Redis and `app/core` code. This test compares the protocols for one call; Part 4 is the
+full 20K load.
 
 **What the numbers say:**
 

@@ -23,7 +23,7 @@ from app.core.errors import BACKEND_ERRORS
 from app.core.faults import FaultInjector
 from app.core.likes import like_post, unlike_post
 from app.core.metrics import render_metrics, track_request
-from app.core.resources import create_pool, create_redis
+from app.core.resources import create_pool, create_read_pool, create_redis
 from app.core.views import record_view, record_views
 from app.grpc_api.generated import counter_pb2, counter_pb2_grpc
 
@@ -36,8 +36,11 @@ MAX_BATCH = 1000
 class CounterService(counter_pb2_grpc.CounterServiceServicer):
     """Method names (LikePost, ...) must match proto/counter.proto exactly."""
 
-    def __init__(self, pool: asyncpg.Pool, redis: Redis, faults: FaultInjector):
+    def __init__(
+        self, pool: asyncpg.Pool, redis: Redis, faults: FaultInjector, read_pool: asyncpg.Pool | None = None
+    ):
         self.pool = pool
+        self.read_pool = read_pool or pool  # GetCounters reads here (a replica, if configured)
         self.redis = redis
         self.faults = faults
 
@@ -77,7 +80,7 @@ class CounterService(counter_pb2_grpc.CounterServiceServicer):
             )
         user_id = request.user_id if request.user_id > 0 else None
         async with self.backend_call(context, "GetCounters"):
-            counters = await get_counters(self.pool, self.redis, user_id, post_ids)
+            counters = await get_counters(self.read_pool, self.redis, user_id, post_ids)
         return counter_pb2.GetCountersResponse(
             counters=[
                 counter_pb2.PostCounter(
@@ -106,8 +109,9 @@ async def check_ids(context: grpc.aio.ServicerContext, user_id: int, post_id: in
 async def start_server(settings: Settings, port: int) -> tuple[grpc.aio.Server, int, CounterService]:
     """Create pool + Redis, start the server. Port 0 = pick a free port (used in tests)."""
     pool = await create_pool(settings)
+    read_pool = await create_read_pool(settings, pool)
     redis = create_redis(settings)
-    service = CounterService(pool, redis, FaultInjector.from_settings(settings))
+    service = CounterService(pool, redis, FaultInjector.from_settings(settings), read_pool)
 
     # so_reuseport: several processes can listen on the same port. The Linux kernel
     # gives each new TCP connection to one of them.
@@ -121,6 +125,8 @@ async def start_server(settings: Settings, port: int) -> tuple[grpc.aio.Server, 
 async def stop_server(server: grpc.aio.Server, service: CounterService, grace: float = 5.0) -> None:
     await server.stop(grace)  # finish running calls, refuse new ones
     await service.redis.aclose()
+    if service.read_pool is not service.pool:
+        await service.read_pool.close()
     await service.pool.close()
 
 

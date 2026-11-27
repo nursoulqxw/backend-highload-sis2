@@ -1,0 +1,29 @@
+== servers with 1 process(es) each
+   unary_rest_w1_1000: 1000/1000 inc/s, p99 6.9 ms, failed 0, dropped 0
+   unary_rest_w1_2000: 1811/2000 inc/s, p99 315.3 ms, failed 36, dropped 5620
+   unary_rest_w1_3000: 1911/3000 inc/s, p99 473.4 ms, failed 365, dropped 32303
+   unary_rest_w1_4000: 1793/4000 inc/s, p99 500.7 ms, failed 2096, dropped 64107
+   unary_grpc_w1_1000: 1000/1000 inc/s, p99 5.2 ms, failed 0, dropped 8
+   unary_grpc_w1_2000: 2000/2000 inc/s, p99 7.0 ms, failed 0, dropped 0
+   unary_grpc_w1_3000: 2898/3000 inc/s, p99 132.3 ms, failed 0, dropped 3052
+   unary_grpc_w1_4000: 3380/4000 inc/s, p99 173.7 ms, failed 0, dropped 18614
+== servers with 4 process(es) each
+   unary_rest_w4_2000: 2000/2000 inc/s, p99 7.5 ms, failed 0, dropped 0
+   unary_rest_w4_4000: 3996/4000 inc/s, p99 48.9 ms, failed 0, dropped 113
+   unary_rest_w4_6000: 5300/6000 inc/s, p99 232.2 ms, failed 6, dropped 20991
+   unary_rest_w4_8000: 4912/8000 inc/s, p99 408.4 ms, failed 546, dropped 92116
+   unary_rest_w4_10000: 4637/10000 inc/s, p99 500.5 ms, failed 3044, dropped 157848
+   unary_rest_w4_12000: 2009/12000 inc/s, p99 621.8 ms, failed 53115, dropped 246626
+   unary_grpc_w4_2000: 2000/2000 inc/s, p99 4.9 ms, failed 0, dropped 0
+   unary_grpc_w4_4000: 3555/4000 inc/s, p99 222.9 ms, failed 0, dropped 13312
+   unary_grpc_w4_6000: 3948/6000 inc/s, p99 383.6 ms, failed 113, dropped 62598
+   unary_grpc_w4_8000: 5033/8000 inc/s, p99 379.4 ms, failed 198, dropped 88795
+   unary_grpc_w4_10000: 5051/10000 inc/s, p99 418.3 ms, failed 576, dropped 147882
+   unary_grpc_w4_12000: 4986/12000 inc/s, p99 463.2 ms, failed 1469, dropped 208959
+== servers with 4 process(es) each
+   batch_rest_w4_20000: already done, skipped
+   batch_rest_w4_40000: already done, skipped
+   batch_grpc_w4_20000: already done, skipped
+   batch_grpc_w4_40000: already done, skipped
+matrix done in 14.4 min
+wrote benchmark/load_results.md and benchmark/load_chart.png

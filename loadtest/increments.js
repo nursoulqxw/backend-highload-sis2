@@ -50,7 +50,9 @@ const failed = new Counter('failed_calls');
 const consistencyLag = new Trend('consistency_lag_ms', true);
 
 function vus(rate) {
-  return { preAllocatedVUs: Math.max(20, Math.ceil(rate / 100)), maxVUs: Math.max(100, Math.ceil(rate / 10)) };
+  // Enough VUs ready from the first second: otherwise k6 itself drops requests at the start
+  // (a VU's first call also opens its connection) and that looks like a server problem.
+  return { preAllocatedVUs: Math.max(50, Math.ceil(rate / 20)), maxVUs: Math.max(200, Math.ceil(rate / 10)) };
 }
 
 const scenarios = {
