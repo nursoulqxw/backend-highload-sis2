@@ -9,7 +9,7 @@ before/after benchmark with p95/p99 and an explanation of every gain.
 | Change | Result | Kept? |
 |---|---|:---:|
 | Sync worker: 1 statement with `unnest` instead of `executemany` (1000 statements) | p99 of a 1000-row batch **44 → 23 ms (1.9x)**, rows/s **+45%** | yes |
-| Pool size 2 / 5 / 10 / 25 / 50 per process | pool 2: 5–7% failed; 25: best p99. Direct: Postgres connections grow to **94** (near the limit). PgBouncer: capped at **30**, same latency | 25 + PgBouncer |
+| Pool size 2 / 5 / 10 / 25 / 50 per process | pool 2: 5–7% failed; 25: best p99. Direct: Postgres connections grow to **94** (near the limit). PgBouncer: capped at **30**, same latency | PgBouncer; pool stays 10 (all "after" runs used 10; 25 is the next step) |
 | PgBouncer (transaction pooling) | 8 processes per API: `too many clients` errors **15 → 0**; Postgres connections capped at 40 (but no extra capacity, see 5.3) | yes |
 | asyncpg `reset` off behind PgBouncer | failed calls **88% → 0.05%** (a bug we found under load, see 5.2) | yes |
 | Read replica for GetCounters | p99 of reads with 8 processes **173 → 50 ms**; replication lag p50 1 ms, max 0.6 s (< 2 s) | yes |

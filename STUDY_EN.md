@@ -188,7 +188,9 @@ The `likes` table is split into **16 parts by HASH(user_id)** ([migrations/versi
 - Measured: direct connections grow **18 → 94** (almost the limit), through PgBouncer a steady
   **30**, same p99.
 - Pool **2** per process is too small: **5–7% errors** (queries wait in the queue and time out).
-  Pool 10 is fine. Bigger is not faster (Lecture 7: "smaller is usually faster").
+  The best p99 was pool **25**; pool 50 is not better (Lecture 7: "smaller is usually faster").
+  The project uses 10: all "after" runs used it. Direct, 25 does not fit
+  (8 pools × 25 = 200 > 100 connections); through PgBouncer it does.
 
 ### 9.5 Read replica
 [db/replica/entrypoint.sh](db/replica/entrypoint.sh), [app/core/resources.py](app/core/resources.py).
